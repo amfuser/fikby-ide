@@ -2,6 +2,20 @@
 name = "fikby_ide"
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "A small GTK4 source editor with tabs and Rust highlighting (syntect)"
+license = "MIT"
 
 [dependencies]
-gtk4 = "0.10.3"
+# GTK4 Rust bindings
+gtk4 = "0.6"
+
+# GLib/GIO are brought in by gtk4, but it's common to pin versions to avoid toolchain mismatches
+glib = "0.14"
+gio = "0.14"
+
+# Syntax highlighting library (pure Rust). We use syntect to highlight .rs files.
+syntect = "5.0"
+
+# For convenience (converting numbers)
+once_cell = "1.18"
