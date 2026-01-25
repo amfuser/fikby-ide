@@ -4,7 +4,6 @@ use gtk4::{
     FileChooserNative, Image, Label, MenuButton, Notebook, Orientation, ResponseType, ScrolledWindow, Popover,
 };
 use gtk4::{gdk, STYLE_PROVIDER_PRIORITY_APPLICATION};
-use glib::clone;
 
 use std::cell::RefCell;
 use std::fs;
@@ -34,11 +33,11 @@ pub fn build_ui(app: &Application) {
         );
     }
 
-    // --- Menubar using MenuButtons + Popovers ---
+    // --- Menubar ---
     let menubar = GtkBox::new(Orientation::Horizontal, 0);
     menubar.style_context().add_class("menubar");
 
-    // File Menu (plain labels)
+    // File menu
     let file_button = MenuButton::builder().label("File").margin_start(6).margin_end(6).build();
     file_button.style_context().add_class("menubutton");
     let file_pop = Popover::new();
@@ -57,7 +56,7 @@ pub fn build_ui(app: &Application) {
     file_button.set_popover(Some(&file_pop));
     menubar.append(&file_button);
 
-    // Edit Menu (Select All / Copy)
+    // Edit menu
     let edit_button = MenuButton::builder().label("Edit").margin_start(6).margin_end(6).build();
     edit_button.style_context().add_class("menubutton");
     let edit_pop = Popover::new();
@@ -70,7 +69,7 @@ pub fn build_ui(app: &Application) {
     edit_button.set_popover(Some(&edit_pop));
     menubar.append(&edit_button);
 
-    // View menu (placeholder)
+    // View (placeholder)
     let view_button = MenuButton::builder().label("View").margin_start(6).margin_end(6).build();
     view_button.style_context().add_class("menubutton");
     let view_pop = Popover::new();
@@ -79,7 +78,7 @@ pub fn build_ui(app: &Application) {
     view_button.set_popover(Some(&view_pop));
     menubar.append(&view_button);
 
-    // Help menu
+    // Help
     let help_button = MenuButton::builder().label("Help").margin_start(6).margin_end(6).build();
     help_button.style_context().add_class("menubutton");
     let help_pop = Popover::new();
@@ -90,11 +89,12 @@ pub fn build_ui(app: &Application) {
     help_button.set_popover(Some(&help_pop));
     menubar.append(&help_button);
 
+    // spacer
     let spacer = Label::new(None);
     spacer.set_hexpand(true);
     menubar.append(&spacer);
 
-    // --- Activity bar (left) ---
+    // --- Activity bar ---
     let activity_bar = GtkBox::new(Orientation::Vertical, 6);
     activity_bar.style_context().add_class("activity-bar");
     activity_bar.set_margin_start(4);
@@ -102,11 +102,9 @@ pub fn build_ui(app: &Application) {
     activity_bar.set_margin_top(8);
     activity_bar.set_margin_bottom(8);
     activity_bar.set_hexpand(false);
-
     let explorer_btn = Button::builder().child(&Image::from_icon_name("folder-symbolic")).build();
     explorer_btn.set_tooltip_text(Some("Explorer"));
     activity_bar.append(&explorer_btn);
-
     let search_btn = Button::builder().child(&Image::from_icon_name("system-search-symbolic")).build();
     search_btn.set_tooltip_text(Some("Search"));
     activity_bar.append(&search_btn);
@@ -119,7 +117,7 @@ pub fn build_ui(app: &Application) {
     let file_tree_placeholder = Label::new(Some("Explorer (files)"));
     sidebar_stack.add_titled(&file_tree_placeholder, Some("explorer"), "Explorer");
 
-    // --- Main area: custom tab bar (our tabs) + notebook (editors) ---
+    // --- Main area: custom tab bar + notebook ---
     let tab_bar_scrolled = ScrolledWindow::builder()
         .min_content_height(38)
         .hscrollbar_policy(gtk4::PolicyType::Automatic)
@@ -131,8 +129,7 @@ pub fn build_ui(app: &Application) {
     tab_bar_scrolled.set_child(Some(&tab_bar));
 
     let editor_notebook = Notebook::new();
-    // Hide the notebook's own tabs; we render our custom tab bar instead
-    editor_notebook.set_show_tabs(false);
+    editor_notebook.set_show_tabs(false); // hide notebook's native tabs
     editor_notebook.set_hexpand(true);
     editor_notebook.set_vexpand(true);
 
@@ -146,14 +143,12 @@ pub fn build_ui(app: &Application) {
             .unwrap_or_else(|| ts.themes.values().next().unwrap().clone()),
     );
 
-    // Storage aligned by notebook page index:
-    // editors[i] corresponds to notebook page i
+    // storage aligned by page index
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let tab_widgets: Rc<RefCell<Vec<gtk4::Button>>> = Rc::new(RefCell::new(Vec::new()));
-    // keep references to the label widgets inside each tab, so we can rename "Page N" after removes
     let tab_labels: Rc<RefCell<Vec<Label>>> = Rc::new(RefCell::new(Vec::new()));
 
-    // Status bar
+    // status bar
     let status_bar = GtkBox::new(Orientation::Horizontal, 6);
     status_bar.style_context().add_class("status");
     let status_left = Label::new(Some("Ln 1, Col 1"));
@@ -163,7 +158,7 @@ pub fn build_ui(app: &Application) {
     status_spacer.set_hexpand(true);
     status_bar.append(&status_spacer);
 
-    // add_tab: Rc-wrapped closure so we can call it from multiple callbacks
+    // add_tab closure
     let add_tab: Rc<dyn Fn(&str, Option<String>, Option<PathBuf>, &Label) -> u32> = {
         let tab_bar = tab_bar.clone();
         let editors = editors.clone();
@@ -174,15 +169,15 @@ pub fn build_ui(app: &Application) {
         let theme = theme.clone();
 
         Rc::new(move |title: &str, initial_text: Option<String>, path: Option<PathBuf>, status: &Label| -> u32 {
-            // create editor
+            // create the editor
             let editor = Editor::new(title, initial_text, path.clone(), ss.clone(), theme.clone());
             editor.update(status);
 
-            // append page without showing native tab label
+            // append page (no native tab)
             let page = editor_notebook.append_page(&editor.content_row(), None::<&gtk4::Widget>);
             let idx = page as usize;
 
-            // insert into editors vec aligned to idx
+            // insert editor aligned to idx
             {
                 let mut eds = editors.borrow_mut();
                 if idx <= eds.len() {
@@ -192,7 +187,7 @@ pub fn build_ui(app: &Application) {
                 }
             }
 
-            // create tab widget
+            // create custom tab button
             let tab_button = Button::new();
             tab_button.style_context().add_class("editor-tab");
             tab_button.set_margin_top(4);
@@ -210,7 +205,7 @@ pub fn build_ui(app: &Application) {
             icon.set_pixel_size(14);
             content_box.append(&icon);
 
-            // label: file name if path provided, otherwise "Page N"
+            // label (filename or Page N)
             let label_text = if let Some(p) = path.as_ref() {
                 p.file_name().and_then(|s| s.to_str()).unwrap_or(title).to_string()
             } else {
@@ -238,7 +233,7 @@ pub fn build_ui(app: &Application) {
             tab_button.set_child(Some(&content_box));
             tab_bar.append(&tab_button);
 
-            // insert tab widget and label into parallel vectors aligned to idx
+            // insert tab widget and label into vectors
             {
                 let mut tv = tab_widgets.borrow_mut();
                 if idx <= tv.len() {
@@ -256,7 +251,7 @@ pub fn build_ui(app: &Application) {
                 }
             }
 
-            // clicking tab: set notebook current to the page for this editor
+            // clicking the custom tab activates notebook page
             {
                 let notebook_cl = editor_notebook.clone();
                 let page_widget = editor.content_row();
@@ -267,7 +262,7 @@ pub fn build_ui(app: &Application) {
                 });
             }
 
-            // close button logic uses notebook.page_num(page_widget) to find current index at click time
+            // close button behavior
             {
                 let notebook_cl = editor_notebook.clone();
                 let editors_cl = editors.clone();
@@ -281,7 +276,7 @@ pub fn build_ui(app: &Application) {
                     if let Some(page_idx) = notebook_cl.page_num(&page_widget) {
                         let idx_usize = page_idx as usize;
 
-                        // if not dirty -> close immediately
+                        // If not dirty, close immediately
                         if !*editor_cl.dirty.borrow() {
                             notebook_cl.remove_page(Some(page_idx));
                             {
@@ -298,9 +293,8 @@ pub fn build_ui(app: &Application) {
                             {
                                 let mut lbls = tab_labels_cl.borrow_mut();
                                 if idx_usize < lbls.len() { lbls.remove(idx_usize); }
-                                // renumber remaining unnamed pages ("Page N")
+                                // renumber Page N labels
                                 for (i, lbl) in lbls.iter().enumerate() {
-                                    // If corresponding editor's current_file is None, rename Page N
                                     let eds = editors_cl.borrow();
                                     if let Some(ed) = eds.get(i) {
                                         if ed.current_file.borrow().is_none() {
@@ -312,7 +306,7 @@ pub fn build_ui(app: &Application) {
                             return;
                         }
 
-                        // Dirty: show Save/Don't Save/Cancel dialog
+                        // Dirty -> prompt Save/Don't Save/Cancel
                         let title = editor_cl
                             .current_file
                             .borrow()
@@ -322,41 +316,45 @@ pub fn build_ui(app: &Application) {
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "Untitled".to_string());
 
-                        let dlg = Dialog::builder()
-                            .modal(true)
-                            .title("Save changes")
-                            .build();
-
-                        let content_area = dlg.content_area();
-                        let label = Label::new(Some(&format!("Save changes to \"{}\"?", title)));
-                        content_area.append(&label);
-
+                        let dlg = Dialog::builder().modal(true).title("Save changes").build();
+                        dlg.content_area().append(&Label::new(Some(&format!("Save changes to \"{}\"?", title))));
                         dlg.add_button("Save", ResponseType::Yes);
                         dlg.add_button("Don't Save", ResponseType::No);
                         dlg.add_button("Cancel", ResponseType::Cancel);
 
-                        dlg.connect_response(clone!(@strong notebook_cl, @strong editors_cl, @strong tab_widgets_cl, @strong tab_labels_cl, @strong tab_bar_cl, @strong page_widget, @strong editor_cl => move |dialog, resp| {
+                        // response handler
+                        let notebook_resp = notebook_cl.clone();
+                        let editors_resp = editors_cl.clone();
+                        let tabs_resp = tab_widgets_cl.clone();
+                        let labels_resp = tab_labels_cl.clone();
+                        let bar_resp = tab_bar_cl.clone();
+                        let page_widget_resp = page_widget.clone();
+                        let editor_resp = editor_cl.clone();
+
+                        dlg.connect_response(move |dialog, resp| {
                             match resp {
                                 ResponseType::Yes => {
-                                    if let Some(path) = &*editor_cl.current_file.borrow() {
-                                        if let Err(err) = editor_cl.save_to_path(path) {
+                                    // clone path out to avoid holding borrow while saving
+                                    let path_opt = { editor_resp.current_file.borrow().clone() };
+                                    if let Some(path) = path_opt {
+                                        if let Err(err) = editor_resp.save_to_path(&path) {
                                             eprintln!("Failed to save: {}", err);
                                         } else {
-                                            if let Some(idx2) = notebook_cl.page_num(&page_widget) {
+                                            if let Some(idx2) = notebook_resp.page_num(&page_widget_resp) {
                                                 let idx2_usize = idx2 as usize;
-                                                notebook_cl.remove_page(Some(idx2));
-                                                let mut eds = editors_cl.borrow_mut();
+                                                notebook_resp.remove_page(Some(idx2));
+                                                let mut eds = editors_resp.borrow_mut();
                                                 if idx2_usize < eds.len() { eds.remove(idx2_usize); }
-                                                let mut tv = tab_widgets_cl.borrow_mut();
+                                                let mut tv = tabs_resp.borrow_mut();
                                                 if idx2_usize < tv.len() {
                                                     let btn = tv.remove(idx2_usize);
-                                                    tab_bar_cl.remove(&btn);
+                                                    bar_resp.remove(&btn);
                                                 }
-                                                let mut lbls = tab_labels_cl.borrow_mut();
+                                                let mut lbls = labels_resp.borrow_mut();
                                                 if idx2_usize < lbls.len() { lbls.remove(idx2_usize); }
-                                                // renumber remaining unnamed pages
+                                                // renumber Page N labels
                                                 for (i, lbl) in lbls.iter().enumerate() {
-                                                    let eds = editors_cl.borrow();
+                                                    let eds = editors_resp.borrow();
                                                     if let Some(ed) = eds.get(i) {
                                                         if ed.current_file.borrow().is_none() {
                                                             lbl.set_text(&format!("Page {}", i + 1));
@@ -366,7 +364,7 @@ pub fn build_ui(app: &Application) {
                                             }
                                         }
                                     } else {
-                                        // Save As flow (no current file)
+                                        // Save As flow
                                         let save_dlg = FileChooserNative::new(
                                             Some("Save File As..."),
                                             None::<&gtk4::Window>,
@@ -374,14 +372,15 @@ pub fn build_ui(app: &Application) {
                                             Some("Save"),
                                             Some("Cancel"),
                                         );
-                                        let buffer = editor_cl.main_buffer.clone();
-                                        let ed_clone2 = editor_cl.clone();
-                                        let notebook_inner = notebook_cl.clone();
-                                        let editors_inner = editors_cl.clone();
-                                        let tab_widgets_inner = tab_widgets_cl.clone();
-                                        let tab_labels_inner = tab_labels_cl.clone();
-                                        let tab_bar_inner = tab_bar_cl.clone();
-                                        let page_widget_inner = page_widget.clone();
+                                        let buffer = editor_resp.main_buffer.clone();
+                                        let ed_clone2 = editor_resp.clone();
+                                        let notebook_inner = notebook_resp.clone();
+                                        let editors_inner = editors_resp.clone();
+                                        let tabs_inner = tabs_resp.clone();
+                                        let labels_inner = labels_resp.clone();
+                                        let bar_inner = bar_resp.clone();
+                                        let page_widget_inner = page_widget_resp.clone();
+
                                         save_dlg.connect_response(move |sd, sresp| {
                                             if sresp == ResponseType::Accept {
                                                 if let Some(file) = sd.file() {
@@ -399,14 +398,13 @@ pub fn build_ui(app: &Application) {
                                                                 notebook_inner.remove_page(Some(idx3));
                                                                 let mut eds = editors_inner.borrow_mut();
                                                                 if idx3_usize < eds.len() { eds.remove(idx3_usize); }
-                                                                let mut tw = tab_widgets_inner.borrow_mut();
+                                                                let mut tw = tabs_inner.borrow_mut();
                                                                 if idx3_usize < tw.len() {
                                                                     let btn = tw.remove(idx3_usize);
-                                                                    tab_bar_inner.remove(&btn);
+                                                                    bar_inner.remove(&btn);
                                                                 }
-                                                                let mut lbls = tab_labels_inner.borrow_mut();
+                                                                let mut lbls = labels_inner.borrow_mut();
                                                                 if idx3_usize < lbls.len() { lbls.remove(idx3_usize); }
-                                                                // renumber remaining unnamed pages
                                                                 for (i, lbl) in lbls.iter().enumerate() {
                                                                     let eds = editors_inner.borrow();
                                                                     if let Some(ed) = eds.get(i) {
@@ -426,21 +424,20 @@ pub fn build_ui(app: &Application) {
                                     }
                                 }
                                 ResponseType::No => {
-                                    if let Some(idx2) = notebook_cl.page_num(&page_widget) {
+                                    if let Some(idx2) = notebook_resp.page_num(&page_widget_resp) {
                                         let idx2_usize = idx2 as usize;
-                                        notebook_cl.remove_page(Some(idx2));
-                                        let mut eds = editors_cl.borrow_mut();
+                                        notebook_resp.remove_page(Some(idx2));
+                                        let mut eds = editors_resp.borrow_mut();
                                         if idx2_usize < eds.len() { eds.remove(idx2_usize); }
-                                        let mut tw = tab_widgets_cl.borrow_mut();
+                                        let mut tw = tabs_resp.borrow_mut();
                                         if idx2_usize < tw.len() {
                                             let btn = tw.remove(idx2_usize);
-                                            tab_bar_cl.remove(&btn);
+                                            bar_resp.remove(&btn);
                                         }
-                                        let mut lbls = tab_labels_cl.borrow_mut();
+                                        let mut lbls = labels_resp.borrow_mut();
                                         if idx2_usize < lbls.len() { lbls.remove(idx2_usize); }
-                                        // renumber remaining unnamed pages
                                         for (i, lbl) in lbls.iter().enumerate() {
-                                            let eds = editors_cl.borrow();
+                                            let eds = editors_resp.borrow();
                                             if let Some(ed) = eds.get(i) {
                                                 if ed.current_file.borrow().is_none() {
                                                     lbl.set_text(&format!("Page {}", i + 1));
@@ -450,26 +447,26 @@ pub fn build_ui(app: &Application) {
                                     }
                                 }
                                 _ => {
-                                    // Cancel -> do nothing
+                                    // cancel or other -> do nothing
                                 }
                             }
                             dialog.close();
-                        }));
-                        dlg.show();
-                    }
-                });
-            }
+                        }); // end dlg.connect_response
 
-            // When notebook page switches, update active tab style and refresh editor status
+                        dlg.show();
+                    } // end if let Some(page_idx)
+                }); // end close_btn.connect_clicked
+            } // end close button block
+
+            // update active tab styling and status on page switch
             {
-                let tab_widgets_cl = tab_widgets.clone();
-                let editors_cl = editors.clone();
-                let status_cl = status.clone();
+                let tab_widgets_cl2 = tab_widgets.clone();
+                let editors_cl2 = editors.clone();
+                let status_cl2 = status.clone();
                 editor_notebook.connect_switch_page(move |nb, _, _| {
                     if let Some(current) = nb.current_page() {
                         let current_usize = current as usize;
-                        // update tab widget active class
-                        let mut tv = tab_widgets_cl.borrow_mut();
+                        let tv = tab_widgets_cl2.borrow_mut();
                         for (i, btn) in tv.iter().enumerate() {
                             if i == current_usize {
                                 btn.style_context().add_class("editor-tab-active");
@@ -478,25 +475,22 @@ pub fn build_ui(app: &Application) {
                             }
                         }
 
-                        // refresh status for current editor
-                        if let Some(ed) = editors_cl.borrow().get(current_usize) {
-                            ed.update(&status_cl);
+                        if let Some(ed) = editors_cl2.borrow().get(current_usize) {
+                            ed.update(&status_cl2);
                         }
                     }
                 });
             }
 
             page
-        })
-    };
+        }) // end closure
+    }; // end Rc::new for add_tab
 
     // create an initial tab and select it
     let first_page = (add_tab)("Page 1", Some(String::new()), None, &status_left);
     editor_notebook.set_current_page(Some(first_page));
 
-    // --- File menu wiring (New/Open/Save/Save As/Quit) ---
-
-    // New
+    // File menu wiring: New
     {
         let add_tab = add_tab.clone();
         let notebook_cl = editor_notebook.clone();
@@ -507,7 +501,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Open
+    // File menu wiring: Open
     {
         let add_tab = add_tab.clone();
         let notebook_cl = editor_notebook.clone();
@@ -521,9 +515,9 @@ pub fn build_ui(app: &Application) {
                 Some("Open"),
                 Some("Cancel"),
             );
-            let add_tab = add_tab.clone();
-            let notebook = notebook_cl.clone();
-            let status_for_response = status_cl.clone();
+            let add_tab2 = add_tab.clone();
+            let notebook2 = notebook_cl.clone();
+            let status2 = status_cl.clone();
             dlg.connect_response(move |dlg2, resp| {
                 if resp == ResponseType::Accept {
                     if let Some(file) = dlg2.file() {
@@ -531,8 +525,8 @@ pub fn build_ui(app: &Application) {
                             match fs::read_to_string(&path) {
                                 Ok(text) => {
                                     let title = path.file_name().and_then(|s| s.to_str()).unwrap_or("File");
-                                    let page = (add_tab)(title, Some(text), Some(path.clone()), &status_for_response);
-                                    notebook.set_current_page(Some(page));
+                                    let page = (add_tab2)(title, Some(text), Some(path.clone()), &status2);
+                                    notebook2.set_current_page(Some(page));
                                 }
                                 Err(err) => {
                                     let err_dlg = Dialog::builder().title("Open error").modal(true).build();
@@ -551,16 +545,19 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Save
+    // File menu wiring: Save
     {
         let notebook_cl = editor_notebook.clone();
         let editors_cl = editors.clone();
         file_save.connect_clicked(move |_| {
             if let Some(page) = notebook_cl.current_page() {
                 let idx = page as usize;
-                if let Some(ed) = editors_cl.borrow().get(idx) {
-                    if let Some(path) = &*ed.current_file.borrow() {
-                        if let Err(err) = ed.save_to_path(path) {
+                let ed_opt = { editors_cl.borrow().get(idx).cloned() };
+                if let Some(ed) = ed_opt {
+                    // clone path out of current_file to avoid overlapping borrow
+                    let path_opt = { ed.current_file.borrow().clone() };
+                    if let Some(path) = path_opt {
+                        if let Err(err) = ed.save_to_path(&path) {
                             let err_dlg = Dialog::builder().title("Save error").modal(true).build();
                             err_dlg.content_area().append(&Label::new(Some(&format!("Failed to save file: {}", err))));
                             err_dlg.add_button("OK", ResponseType::Ok);
@@ -568,7 +565,7 @@ pub fn build_ui(app: &Application) {
                             err_dlg.show();
                         }
                     } else {
-                        // Save As if no path
+                        // Save As flow
                         let save_dlg = FileChooserNative::new(
                             Some("Save File As..."),
                             None::<&gtk4::Window>,
@@ -607,14 +604,15 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Save As (explicit)
+    // File menu wiring: Save As (explicit)
     {
         let notebook_cl = editor_notebook.clone();
         let editors_cl = editors.clone();
         file_saveas.connect_clicked(move |_| {
             if let Some(page) = notebook_cl.current_page() {
                 let idx = page as usize;
-                if let Some(ed) = editors_cl.borrow().get(idx) {
+                let ed_opt = { editors_cl.borrow().get(idx).cloned() };
+                if let Some(ed) = ed_opt {
                     let buffer = ed.main_buffer.clone();
                     let dlg = FileChooserNative::new(
                         Some("Save File As..."),
@@ -653,7 +651,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Quit
+    // File -> Quit
     {
         let app_cl = app.clone();
         file_quit.connect_clicked(move |_| {
@@ -671,7 +669,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Wire Edit buttons (Select All / Copy) directly
+    // Edit actions: Select All
     {
         let editor_notebook = editor_notebook.clone();
         let editors = editors.clone();
@@ -687,6 +685,8 @@ pub fn build_ui(app: &Application) {
             }
         });
     }
+
+    // Edit actions: Copy
     {
         let editor_notebook = editor_notebook.clone();
         let editors = editors.clone();
@@ -704,7 +704,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Final composition
+    // Compose main layout
     let main_area = GtkBox::new(Orientation::Horizontal, 0);
     main_area.append(&activity_bar);
     main_area.append(&sidebar_stack);
@@ -722,6 +722,7 @@ pub fn build_ui(app: &Application) {
     root_vbox.append(&main_area);
     root_vbox.append(&status_bar);
 
+    // Build window
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Fikby")

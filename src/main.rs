@@ -14,6 +14,5 @@ fn main() {
     app.connect_activate(|app| {
         ui::build_ui(app);
     });
-
     app.run();
 }
