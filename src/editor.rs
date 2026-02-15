@@ -282,6 +282,59 @@ impl Editor {
             });
         }
 
+        // Update gutter when buffer changes
+        {
+            let gutter_label_clone = editor.gutter_label.clone();
+            let buffer_clone = editor.main_buffer.clone();
+            
+            editor.main_buffer.connect_changed(move |_| {
+                // Update gutter line numbers
+                let s = buffer_clone.start_iter();
+                let e = buffer_clone.end_iter();
+                let content = buffer_clone.text(&s, &e, false);
+
+                let line_count = if content.is_empty() {
+                    1
+                } else {
+                    let text_str = content.as_str();
+                    let newline_count = text_str.chars().filter(|&c| c == '\n').count();
+                    
+                    if text_str.ends_with('\n') {
+                        newline_count
+                    } else {
+                        newline_count + 1
+                    }
+                };
+                
+                let width = line_count.to_string().len();
+                let mut numbers = String::with_capacity(line_count * (width + 2));
+                
+                for i in 1..=line_count {
+                    if i > 1 {
+                        numbers.push('\n');
+                    }
+                    numbers.push_str(&format!("{:>width$}", i, width = width));
+                }
+                
+                gutter_label_clone.set_text(&numbers);
+            });
+        }
+
+        // Scroll to cursor on buffer change
+        {
+            let view_clone = editor.main_view.clone();
+            let buffer_clone = editor.main_buffer.clone();
+            
+            editor.main_buffer.connect_changed(move |_| {
+                // Scroll to show the cursor after a short delay to ensure the view has updated
+                glib::idle_add_local(clone!(@strong view_clone, @strong buffer_clone => @default-return glib::Continue(false), move || {
+                    let insert_mark = buffer_clone.get_insert();
+                    view_clone.scroll_to_mark(&insert_mark, 0.0, false, 0.0, 0.0);
+                    glib::Continue(false)
+                }));
+            });
+        }
+
         editor
     }
 
