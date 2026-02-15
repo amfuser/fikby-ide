@@ -270,8 +270,8 @@ impl Editor {
     }
 
     /// Update gutter numbers, schedule highlighting (deferred), update status immediately.
-    /// This function continues to exist; the background pipeline will also run when buffer changes.
-    pub fn update(&self, status_label: &Label) {
+    /// status_info_label will be updated with path & size if available.
+    pub fn update(&self, status_label: &Label, status_info_label: &Label) {
         let s = self.main_buffer.start_iter();
         let e = self.main_buffer.end_iter();
         let content = self.main_buffer.text(&s, &e, false);
@@ -291,6 +291,20 @@ impl Editor {
         let line = it.line();
         let col = it.line_offset();
         status_label.set_text(&format!("Ln {}, Col {}", line + 1, col + 1));
+
+        // update status info (path + size)
+        let info = if let Some(p) = self.current_file.borrow().as_ref() {
+            if let Ok(meta) = std::fs::metadata(p) {
+                let size = meta.len();
+                format!("{} — {} bytes", p.display(), size)
+            } else {
+                format!("{}", p.display())
+            }
+        } else {
+            let len = content.len();
+            format!("Untitled — {} bytes", len)
+        };
+        status_info_label.set_text(&info);
 
         // decide whether to highlight (based on extension or default true)
         let do_highlight = self
@@ -322,6 +336,16 @@ impl Editor {
                 highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &theme);
                 glib::Continue(false)
             }));
+        }
+    }
+
+    /// Toggle soft wrap for this editor
+    pub fn toggle_wrap(&self) {
+        let current = self.main_view.wrap_mode();
+        if current == WrapMode::None {
+            self.main_view.set_wrap_mode(WrapMode::Word);
+        } else {
+            self.main_view.set_wrap_mode(WrapMode::None);
         }
     }
 

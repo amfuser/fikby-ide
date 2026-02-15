@@ -12,4 +12,5 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 ropey = "1.3"
+fuzzy-matcher = "0.3"
 # ... keep your other dependencies as before
