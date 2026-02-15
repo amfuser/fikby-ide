@@ -61,12 +61,28 @@ impl Editor {
         main_view.set_hexpand(true);
         main_view.set_vexpand(true);
         main_view.set_monospace(true);
+        main_view.style_context().add_class("editor-view");
+        
+        // Control exact line spacing - set to 0 for tight, consistent spacing
+        main_view.set_pixels_above_lines(0);
+        main_view.set_pixels_below_lines(0);
+        main_view.set_pixels_inside_wrap(0);
+        
+        // Remove margins that might offset alignment
+        main_view.set_top_margin(0);
+        main_view.set_bottom_margin(0);
+        main_view.set_left_margin(4);
+        main_view.set_right_margin(4);
+        
         let main_buffer = main_view.buffer();
 
         // gutter as Label
         let gutter_label = Label::new(None);
         gutter_label.style_context().add_class("gutter");
-        gutter_label.set_halign(Align::Start);
+        gutter_label.set_halign(Align::End);
+        gutter_label.set_valign(Align::Start);
+        gutter_label.set_yalign(0.0);
+        gutter_label.set_xalign(1.0);
 
         // scrolled windows
         let main_scrolled = ScrolledWindow::builder()
@@ -81,7 +97,7 @@ impl Editor {
             .min_content_height(200)
             .hscrollbar_policy(PolicyType::Never)
             .vscrollbar_policy(PolicyType::Automatic)
-            .min_content_width(80)
+            .min_content_width(60)
             .build();
 
         // share vertical adjustment
@@ -276,13 +292,34 @@ impl Editor {
         let e = self.main_buffer.end_iter();
         let content = self.main_buffer.text(&s, &e, false);
 
-        // gutter numbers - immediate
-        let line_count = if content.is_empty() { 1 } else { content.lines().count() };
+        // Count lines by counting newlines in the actual text content
+        let line_count = if content.is_empty() {
+            1  // Empty file still shows line 1
+        } else {
+            let text_str = content.as_str();
+            let newline_count = text_str.chars().filter(|&c| c == '\n').count();
+            
+            // If the text ends with a newline, the line count is the number of newlines
+            // Otherwise, it's newlines + 1 (for the last line without a newline)
+            if text_str.ends_with('\n') {
+                newline_count
+            } else {
+                newline_count + 1
+            }
+        };
+        
         let width = line_count.to_string().len();
-        let mut numbers = String::with_capacity(line_count * (width + 1));
+        
+        // Build line numbers as plain text
+        let mut numbers = String::with_capacity(line_count * (width + 2));
+        
         for i in 1..=line_count {
-            numbers.push_str(&format!("{:>width$}\n", i, width = width));
+            if i > 1 {
+                numbers.push('\n');
+            }
+            numbers.push_str(&format!("{:>width$}", i, width = width));
         }
+        
         self.gutter_label.set_text(&numbers);
 
         // status - immediate

@@ -24,6 +24,12 @@ pub const CSS: &str = r#"
     padding-left: 6px;
     padding-right: 6px;
     font-family: monospace;
+    font-size: 10pt;
+    line-height: .9925;
+}
+.editor-view {
+    font-family: monospace;
+    font-size: 10pt;
 }
 .status {
     padding: 6px;
