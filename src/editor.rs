@@ -312,8 +312,9 @@ impl Editor {
                 let bottom_y = top_y + visible_rect.height();
                 
                 // Find which lines are visible
-                let (top_iter, _) = view_clone.iter_at_location(0, top_y);
-                let (bottom_iter, _) = view_clone.iter_at_location(0, bottom_y);
+                // iter_at_location returns Option<TextIter> in GTK4
+                let top_iter = view_clone.iter_at_location(0, top_y);
+                let bottom_iter = view_clone.iter_at_location(0, bottom_y);
                 
                 let first_line = top_iter.map(|iter| iter.line()).unwrap_or(0);
                 let last_line = bottom_iter.map(|iter| iter.line()).unwrap_or(buffer_clone.line_count() - 1);
@@ -350,7 +351,7 @@ impl Editor {
                         if window_y >= 0 && window_y < height {
                             layout.set_text(&(line_num + 1).to_string());
                             cr.move_to(5.0, window_y as f64);
-                            gtk4::pangocairo::functions::show_layout(cr, &layout);
+                            pangocairo::functions::show_layout(cr, &layout);
                         }
                     }
                 }
