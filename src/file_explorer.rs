@@ -3,6 +3,7 @@ use gtk4::{
     gio, glib, CellRendererText, PopoverMenu, ScrolledWindow, TreeIter, TreePath, TreeStore, 
     TreeView, TreeViewColumn, GestureClick,
 };
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -20,7 +21,7 @@ const COL_IS_DIR: u32 = 2; // Is directory (bool)
 const COL_ICON: u32 = 3; // Icon name
 
 impl FileExplorer {
-    pub fn new() -> Rc<Self> {
+    pub fn new() -> Rc<RefCell<Self>> {
         // Create TreeStore with columns: name, path, is_dir, icon_name
         let tree_store = TreeStore::new(&[
             glib::Type::STRING,  // Name
@@ -53,12 +54,12 @@ impl FileExplorer {
             .vscrollbar_policy(gtk4::PolicyType::Automatic)
             .build();
 
-        let explorer = Rc::new(FileExplorer {
+        let explorer = Rc::new(RefCell::new(FileExplorer {
             widget: scrolled,
             tree_view,
             tree_store,
             root_path: None,
-        });
+        }));
 
         explorer
     }

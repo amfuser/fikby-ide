@@ -67,7 +67,7 @@ pub fn build_ui(app: &Application) {
     paned.set_vexpand(true);
 
     // Create file explorer
-    let file_explorer = FileExplorer::new();
+    let file_explorer_rc = FileExplorer::new();
     
     // Set current directory as root (or fallback to home)
     let root_dir = std::env::current_dir().unwrap_or_else(|_| {
@@ -77,8 +77,6 @@ pub fn build_ui(app: &Application) {
             .unwrap_or_else(|_| std::path::PathBuf::from("/"))
     });
     
-    // We need to make it mutable, so we'll use Rc<RefCell<>>
-    let file_explorer_rc = Rc::new(std::cell::RefCell::new(file_explorer));
     file_explorer_rc.borrow_mut().set_root_directory(root_dir);
     
     // Setup context menu (will be connected to actions later)
