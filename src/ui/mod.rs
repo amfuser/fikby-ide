@@ -807,7 +807,7 @@ pub fn build_ui(app: &Application) {
 
                 let content_area = dialog.content_area();
                 let entry = Entry::new();
-                entry.set_text(current_name);
+                entry.set_text(&current_name);
                 entry.set_margin_top(10);
                 entry.set_margin_bottom(10);
                 entry.set_margin_start(10);
