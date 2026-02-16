@@ -1,7 +1,29 @@
 pub const APP_ID: &str = "org.gtk_rs.Fikby";
 
-// Keep CSS minimal and GTK-compatible (no unsupported properties)
-pub const CSS: &str = r#"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    pub fn css(&self) -> &'static str {
+        match self {
+            ThemeMode::Light => LIGHT_CSS,
+            ThemeMode::Dark => DARK_CSS,
+        }
+    }
+    
+    pub fn syntax_theme_name(&self) -> &'static str {
+        match self {
+            ThemeMode::Light => "base16-ocean.light",
+            ThemeMode::Dark => "base16-ocean.dark",
+        }
+    }
+}
+
+// Light theme CSS
+const LIGHT_CSS: &str = r#"
 .menubar {
     background: #f5f5f5;
     padding: 4px 10px;
@@ -30,12 +52,59 @@ pub const CSS: &str = r#"
 .editor-view {
     font-family: monospace;
     font-size: 10pt;
+    background: #ffffff;
+    color: #000000;
 }
 .status {
     padding: 6px;
+    background: #f5f5f5;
     color: #333;
     font-family: monospace;
 }
 "#;
+
+// Dark theme CSS
+const DARK_CSS: &str = r#"
+.menubar {
+    background: #2b2b2b;
+    padding: 4px 10px;
+}
+.menubutton {
+    font-weight: 600;
+    padding: 2px 1px;
+    border-radius: 4px;
+    color: #e0e0e0;
+}
+.menubutton:hover {
+    background: #3a3a3a;
+}
+.right-button {
+    padding: 4px 8px;
+    margin-right: 6px;
+    color: #e0e0e0;
+}
+.gutter {
+    background: #2b2b2b;
+    color: #a0a0a0;
+    padding-left: 6px;
+    padding-right: 6px;
+    font-family: monospace;
+    font-size: 10pt;
+    line-height: .994;
+}
+.editor-view {
+    font-family: monospace;
+    font-size: 10pt;
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
+.status {
+    padding: 6px;
+    background: #2b2b2b;
+    color: #e0e0e0;
+    font-family: monospace;
+}
+"#;
+
 // Highlighting cutoff to avoid UI stalls on huge files
 pub const HIGHLIGHT_CHAR_CUTOFF: usize = 200_000;
