@@ -258,8 +258,8 @@ impl FileExplorer {
                 tree_view.selection().select_path(&path);
                 
                 if let Some(iter) = tree_store.iter(&path) {
-                    let file_path: String = tree_store.value(&iter, COL_PATH as i32).get().unwrap_or_default();
-                    let is_dir: bool = tree_store.value(&iter, COL_IS_DIR as i32).get().unwrap_or(false);
+                    let file_path: String = tree_store.get(&iter, COL_PATH as i32);
+                    let is_dir: bool = tree_store.get(&iter, COL_IS_DIR as i32);
                     
                     if !file_path.is_empty() {
                         // Create context menu
