@@ -10,6 +10,7 @@ use std::rc::Rc;
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
+use crate::config::ThemeMode;
 use crate::editor::Editor;
 use crate::find_replace::FindReplaceDialog;
 use crate::config::ThemeMode;
@@ -18,8 +19,8 @@ pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
     let ts = ThemeSet::load_defaults();
     
-    // Theme state management
-    let current_theme_mode: Rc<RefCell<ThemeMode>> = Rc::new(RefCell::new(ThemeMode::Dark));
+    // Start with dark theme by default
+    let current_theme_mode = Rc::new(RefCell::new(ThemeMode::Dark));
     let theme = Rc::new(ts.themes["base16-ocean.dark"].clone());
     let current_theme: Rc<RefCell<Rc<Theme>>> = Rc::new(RefCell::new(theme.clone()));
 
@@ -38,6 +39,8 @@ pub fn build_ui(app: &Application) {
 
     let file_menu = create_file_menu();
     let edit_menu = create_edit_menu();
+    
+    // Pass the theme mode to view menu for theme toggle
     let view_menu = create_view_menu();
 
     menubar.append(&file_menu);
@@ -105,6 +108,26 @@ pub fn build_ui(app: &Application) {
     // Store references in Rc<RefCell<>> for sharing
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
+
+    // TOGGLE THEME ACTION
+    {
+        let action = SimpleAction::new("toggle-theme", None);
+        let theme_mode_clone = current_theme_mode.clone();
+
+        action.connect_activate(move |_, _| {
+            let mut mode = theme_mode_clone.borrow_mut();
+            *mode = if *mode == ThemeMode::Light {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            };
+            
+            // Apply new theme
+            crate::load_css(*mode);
+        });
+
+        app.add_action(&action);
+    }
 
     // NEW FILE ACTION
     {
