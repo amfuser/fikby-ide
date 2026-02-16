@@ -4,6 +4,9 @@ mod highlight;
 mod ui;
 mod find_replace;
 
+#[cfg(test)]
+mod tests;
+
 use gtk4::prelude::*;
 use gtk4::{gdk, Application, CssProvider};
 use config::ThemeMode;
