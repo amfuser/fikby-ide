@@ -104,7 +104,7 @@ impl Editor {
 
         let gutter_scrolled = ScrolledWindow::builder()
             .child(&gutter_view)
-            .min_content_height(200)
+            // No min_content_height - gutter follows main view's size via shared adjustment
             .hscrollbar_policy(PolicyType::Never)
             .vscrollbar_policy(PolicyType::Never)  // Gutter should never scroll on its own
             .min_content_width(80)  // Increased from 60 to prevent number truncation
