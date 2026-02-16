@@ -662,7 +662,8 @@ impl Editor {
             let theme = self.theme.clone();
 
             glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
-                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &theme);
+                let theme_ref = theme.borrow();
+                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
                 glib::Continue(false)
             }));
         }

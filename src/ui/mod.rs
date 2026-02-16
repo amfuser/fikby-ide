@@ -13,7 +13,6 @@ use syntect::parsing::SyntaxSet;
 use crate::config::ThemeMode;
 use crate::editor::Editor;
 use crate::find_replace::FindReplaceDialog;
-use crate::config::ThemeMode;
 
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
