@@ -78,6 +78,9 @@ impl Editor {
         gutter_label.set_valign(Align::Start);
         gutter_label.set_yalign(0.0);
         gutter_label.set_xalign(1.0);
+        // Set margins to match TextView for proper line alignment
+        gutter_label.set_margin_top(0);
+        gutter_label.set_margin_bottom(0);
 
         let main_scrolled = ScrolledWindow::builder()
             .child(&main_view)

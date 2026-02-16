@@ -51,6 +51,8 @@ window {
     padding-right: 6px;
     padding-top: 0px;
     padding-bottom: 0px;
+    margin-top: 0px;
+    margin-bottom: 0px;
     font-family: monospace;
     font-size: 10pt;
     line-height: 1.2;
@@ -122,6 +124,8 @@ window {
     padding-right: 6px;
     padding-top: 0px;
     padding-bottom: 0px;
+    margin-top: 0px;
+    margin-bottom: 0px;
     font-family: monospace;
     font-size: 10pt;
     line-height: 1.2;
