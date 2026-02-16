@@ -632,10 +632,11 @@ pub fn build_ui(app: &Application) {
 
         // Update file explorer highlighting when switching tabs
         let file_explorer_clone3 = file_explorer_rc.clone();
+        let editors_clone2 = editors.clone();
         let notebook_clone = notebook.clone();
         notebook_clone.connect_switch_page(move |_notebook, page, _page_num| {
             // Find which editor corresponds to this page
-            let editors = editors_clone.borrow();
+            let editors = editors_clone2.borrow();
             for editor in editors.iter() {
                 if editor.content_row().upcast_ref::<gtk4::Widget>() == page {
                     if let Some(ref path) = *editor.current_file.borrow() {
@@ -793,7 +794,8 @@ pub fn build_ui(app: &Application) {
             if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
                 let current_name = selected_path.file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_string();
 
                 // Create dialog for new name input
                 let dialog = Dialog::with_buttons(

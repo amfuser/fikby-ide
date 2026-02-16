@@ -203,7 +203,7 @@ impl FileExplorer {
             self.tree_store.iter_first()
         };
 
-        if let Some(mut current_iter) = iter {
+        if let Some(current_iter) = iter {
             loop {
                 // GTK4: Use get() instead of value().get()
                 let path: String = self.tree_store.get(&current_iter, COL_PATH as i32);
@@ -243,7 +243,7 @@ impl FileExplorer {
         }
     }
 
-    pub fn setup_context_menu(&self, app: &gtk4::Application) {
+    pub fn setup_context_menu(&self, _app: &gtk4::Application) {
         let tree_view = self.tree_view.clone();
         let tree_store = self.tree_store.clone();
         
