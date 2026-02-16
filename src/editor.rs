@@ -106,8 +106,8 @@ impl Editor {
             .child(&gutter_view)
             .min_content_height(200)
             .hscrollbar_policy(PolicyType::Never)
-            .vscrollbar_policy(PolicyType::Automatic)
-            .min_content_width(60)
+            .vscrollbar_policy(PolicyType::Never)  // Gutter should never scroll on its own
+            .min_content_width(80)  // Increased from 60 to prevent number truncation
             .build();
 
         let vadj: gtk4::Adjustment = main_scrolled.vadjustment();
