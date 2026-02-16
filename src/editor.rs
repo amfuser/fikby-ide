@@ -28,12 +28,13 @@ pub enum FileState {
     Saved(PathBuf),
 }
 
-/// Editor encapsulates a text editor view, gutter label, buffers and tag cache.
+/// Editor encapsulates a text editor view, gutter view, buffers and tag cache.
 #[allow(dead_code)]
 pub struct Editor {
     pub main_view: TextView,
     pub main_buffer: TextBuffer,
-    pub gutter_label: Label,
+    pub gutter_view: TextView,
+    pub gutter_buffer: TextBuffer,
     pub content_row: GtkBox,
     pub header: GtkBox,
     pub tab_label: Label,
@@ -72,15 +73,26 @@ impl Editor {
         // Enable undo/redo
         main_buffer.set_enable_undo(true);
 
-        let gutter_label = Label::new(None);
-        gutter_label.style_context().add_class("gutter");
-        gutter_label.set_halign(Align::End);
-        gutter_label.set_valign(Align::Start);
-        gutter_label.set_yalign(0.0);
-        gutter_label.set_xalign(1.0);
-        // Set margins to match TextView for proper line alignment
-        gutter_label.set_margin_top(0);
-        gutter_label.set_margin_bottom(0);
+        // Gutter TextView for line numbers (using TextView instead of Label for perfect alignment)
+        let gutter_view = TextView::new();
+        gutter_view.set_editable(false);
+        gutter_view.set_cursor_visible(false);
+        gutter_view.set_can_focus(false);
+        gutter_view.set_monospace(true);
+        gutter_view.style_context().add_class("gutter");
+        gutter_view.set_halign(Align::End);
+        gutter_view.set_valign(Align::Start);
+        
+        // Match all spacing settings from main_view for perfect alignment
+        gutter_view.set_pixels_above_lines(0);
+        gutter_view.set_pixels_below_lines(0);
+        gutter_view.set_pixels_inside_wrap(0);
+        gutter_view.set_top_margin(0);
+        gutter_view.set_bottom_margin(0);
+        gutter_view.set_left_margin(4);  // Match main_view
+        gutter_view.set_right_margin(4); // Match main_view
+        
+        let gutter_buffer = gutter_view.buffer();
 
         let main_scrolled = ScrolledWindow::builder()
             .child(&main_view)
@@ -90,7 +102,7 @@ impl Editor {
             .build();
 
         let gutter_scrolled = ScrolledWindow::builder()
-            .child(&gutter_label)
+            .child(&gutter_view)
             .min_content_height(200)
             .hscrollbar_policy(PolicyType::Never)
             .vscrollbar_policy(PolicyType::Automatic)
@@ -169,7 +181,8 @@ impl Editor {
         let editor = Rc::new(Self {
             main_view,
             main_buffer,
-            gutter_label,
+            gutter_view,
+            gutter_buffer,
             content_row,
             header,
             tab_label: tab_label.clone(),
@@ -489,7 +502,7 @@ impl Editor {
             numbers.push_str(&format!("{:>width$}", i, width = width));
         }
         
-        self.gutter_label.set_text(&numbers);
+        self.gutter_buffer.set_text(&numbers);
     }
 
     /// Update the status bar with current cursor position and file info
