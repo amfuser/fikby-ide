@@ -352,6 +352,11 @@ impl Editor {
             });
         }
 
+        // Initialize line numbers for the initial content
+        // This is critical because the connect_changed handler above only fires on
+        // FUTURE changes, not the initial text that was set before the handler was connected
+        editor.update_line_numbers();
+
         editor
     }
 
