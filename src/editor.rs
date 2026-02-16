@@ -302,59 +302,57 @@ impl Editor {
             let buffer_clone = main_buffer.clone();
             let view_clone = main_view.clone();
             
-            line_numbers.set_draw_func(clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, _height| {
-                // Get the vertical adjustment to know scroll position
-                let line_count = buffer_clone.line_count();
+            line_numbers.set_draw_func(clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, height| {
+                // Only draw visible line numbers for performance
+                // Critical: This prevents window expansion and hangs with large files
                 
-                // Get font metrics
+                // Get the visible rectangle (what's actually on screen)
+                let visible_rect = view_clone.visible_rect();
+                let top_y = visible_rect.y();
+                let bottom_y = top_y + visible_rect.height();
+                
+                // Find which lines are visible
+                let (top_iter, _) = view_clone.iter_at_location(0, top_y);
+                let (bottom_iter, _) = view_clone.iter_at_location(0, bottom_y);
+                
+                let first_line = top_iter.map(|iter| iter.line()).unwrap_or(0);
+                let last_line = bottom_iter.map(|iter| iter.line()).unwrap_or(buffer_clone.line_count() - 1);
+                
+                // Setup Pango for text rendering
                 let pango_context = view_clone.pango_context();
                 let font_desc = pango_context.font_description().unwrap();
-                
-                // Get the visible area
-                let visible_rect = view_clone.visible_rect();
-                let (first_y, _) = view_clone.buffer_to_window_coords(
-                    gtk4::TextWindowType::Widget,
-                    0,
-                    visible_rect.y()
-                );
-                
-                // Calculate which lines are visible
-                let first_visible = view_clone.iter_at_location(0, first_y as i32);
-                let first_line = if let Some(iter) = first_visible {
-                    iter.line()
-                } else {
-                    0
-                };
-                
-                // Draw line numbers for visible lines
                 let layout = gtk4::pango::Layout::new(&pango_context);
                 layout.set_font_description(Some(&font_desc));
                 layout.set_alignment(gtk4::pango::Alignment::Right);
-                layout.set_width((width - 10) * gtk4::pango::SCALE);  // Leave some padding
+                layout.set_width((width - 10) * gtk4::pango::SCALE);
                 
-                // Get theme colors from CSS
+                // Get text color from theme
                 let style_context = view_clone.style_context();
                 let fg_color = style_context.color();
+                cr.set_source_rgba(
+                    fg_color.red() as f64,
+                    fg_color.green() as f64,
+                    fg_color.blue() as f64,
+                    fg_color.alpha() as f64
+                );
                 
-                cr.set_source_rgba(fg_color.red() as f64, fg_color.green() as f64, fg_color.blue() as f64, fg_color.alpha() as f64);
-                
-                let mut y = 0.0;
-                for line_num in first_line..line_count.min(first_line + 100) {  // Limit to 100 visible lines
-                    // Get the Y position of this line
-                    let iter = buffer_clone.iter_at_line(line_num).unwrap_or_else(|| buffer_clone.start_iter());
-                    let location = view_clone.iter_location(&iter);
-                    let (_, window_y) = view_clone.buffer_to_window_coords(
-                        gtk4::TextWindowType::Widget,
-                        location.x(),
-                        location.y()
-                    );
-                    
-                    y = window_y as f64 - first_y as f64;
-                    
-                    // Draw the line number
-                    layout.set_text(&(line_num + 1).to_string());
-                    cr.move_to(5.0, y);
-                    gtk4::pangocairo::functions::show_layout(cr, &layout);
+                // Draw ONLY visible line numbers (typically ~50-100 lines)
+                for line_num in first_line..=last_line {
+                    if let Some(iter) = buffer_clone.iter_at_line(line_num) {
+                        let location = view_clone.iter_location(&iter);
+                        let (_, window_y) = view_clone.buffer_to_window_coords(
+                            gtk4::TextWindowType::Widget,
+                            0,
+                            location.y()
+                        );
+                        
+                        // Only draw if within the DrawingArea bounds
+                        if window_y >= 0 && window_y < height {
+                            layout.set_text(&(line_num + 1).to_string());
+                            cr.move_to(5.0, window_y as f64);
+                            gtk4::pangocairo::functions::show_layout(cr, &layout);
+                        }
+                    }
                 }
             }));
         }
