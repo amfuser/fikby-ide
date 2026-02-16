@@ -599,6 +599,11 @@ impl Editor {
         
         self.gutter_label.set_text(&numbers);
 
+        // Get buffer content for status display and syntax highlighting
+        let s = self.main_buffer.start_iter();
+        let e = self.main_buffer.end_iter();
+        let content = self.main_buffer.text(&s, &e, false);
+
         let ins = self.main_buffer.get_insert();
         let it = self.main_buffer.iter_at_mark(&ins);
         let line = it.line();
