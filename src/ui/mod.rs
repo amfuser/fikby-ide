@@ -12,6 +12,7 @@ use syntect::parsing::SyntaxSet;
 
 use crate::config::ThemeMode;
 use crate::editor::Editor;
+use crate::file_explorer::FileExplorer;
 use crate::find_replace::FindReplaceDialog;
 
 pub fn build_ui(app: &Application) {
@@ -64,19 +65,22 @@ pub fn build_ui(app: &Application) {
     let paned = Paned::new(Orientation::Horizontal);
     paned.set_vexpand(true);
 
-    // Sidebar placeholder
-    let sidebar = GtkBox::new(Orientation::Vertical, 0);
-    sidebar.set_width_request(200);
-    let sidebar_label = Label::new(Some("File Explorer\n(Coming Soon)"));
-    sidebar.append(&sidebar_label);
+    // Create file explorer
+    let file_explorer = FileExplorer::new();
+    
+    // Set current directory as root (or fallback to home)
+    let root_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+    });
+    
+    // We need to make it mutable, so we'll use Rc<RefCell<>>
+    let file_explorer_rc = Rc::new(std::cell::RefCell::new(file_explorer));
+    file_explorer_rc.borrow_mut().set_root_directory(root_dir);
 
-    let sidebar_scrolled = ScrolledWindow::builder()
-        .child(&sidebar)
-        .hscrollbar_policy(PolicyType::Automatic)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .build();
-
-    paned.set_start_child(Some(&sidebar_scrolled));
+    paned.set_start_child(Some(&file_explorer_rc.borrow().widget));
     paned.set_resize_start_child(false);
     paned.set_shrink_start_child(false);
 
@@ -551,6 +555,89 @@ pub fn build_ui(app: &Application) {
             if let Some(page_num) = notebook_clone.page_num(&editor_clone.content_row()) {
                 notebook_clone.remove_page(Some(page_num));
                 editors_clone.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+            }
+        });
+    }
+
+    // Connect file explorer actions
+    {
+        // File activation (double-click or Enter)
+        let file_explorer_clone = file_explorer_rc.clone();
+        let notebook_clone = notebook.clone();
+        let editors_clone = editors.clone();
+        let current_editor_clone = current_editor.clone();
+        let ss_clone = ss.clone();
+        let current_theme_clone = current_theme.clone();
+        let status_label_clone = status_label.clone();
+        let status_info_label_clone = status_info_label.clone();
+
+        file_explorer_rc.borrow().connect_row_activated(move |path_buf, is_dir| {
+            if !is_dir {
+                // Open the file
+                if let Ok(content) = std::fs::read_to_string(&path_buf) {
+                    let theme_clone = current_theme_clone.borrow().clone();
+                    let editor = Editor::new(
+                        "File",
+                        Some(content),
+                        Some(path_buf.clone()),
+                        ss_clone.clone(),
+                        theme_clone,
+                    );
+
+                    let page_index = notebook_clone.append_page(
+                        &editor.content_row(),
+                        Some(&editor.header),
+                    );
+
+                    notebook_clone.set_current_page(Some(page_index));
+                    editor.update(&status_label_clone, &status_info_label_clone);
+                    
+                    editors_clone.borrow_mut().push(editor.clone());
+                    *current_editor_clone.borrow_mut() = Some(editor.clone());
+
+                    // Highlight the file in the explorer
+                    file_explorer_clone.borrow().highlight_file(&path_buf);
+
+                    // Connect close button
+                    let notebook_clone2 = notebook_clone.clone();
+                    let editors_clone2 = editors_clone.clone();
+                    let editor_clone = editor.clone();
+                    editor.close_button.connect_clicked(move |_| {
+                        if let Some(page_num) = notebook_clone2.page_num(&editor_clone.content_row()) {
+                            notebook_clone2.remove_page(Some(page_num));
+                            editors_clone2.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                        }
+                    });
+                }
+            }
+        });
+
+        // Directory expansion
+        let file_explorer_clone2 = file_explorer_rc.clone();
+        file_explorer_rc.borrow().connect_row_expanded(move |tree_store, iter, _path| {
+            // Check if this is the first expansion (has dummy child)
+            if let Some(child_iter) = tree_store.iter_children(Some(iter)) {
+                let child_path: String = tree_store.value(&child_iter, 1).get().unwrap_or_default();
+                if child_path.is_empty() {
+                    // This is a dummy child, expand the directory
+                    file_explorer_clone2.borrow().expand_directory(iter);
+                }
+            }
+        });
+
+        // Update file explorer highlighting when switching tabs
+        let file_explorer_clone3 = file_explorer_rc.clone();
+        let notebook_clone = notebook.clone();
+        notebook_clone.connect_switch_page(move |_notebook, page, _page_num| {
+            // Find which editor corresponds to this page
+            let editors = editors_clone.borrow();
+            for editor in editors.iter() {
+                if editor.content_row().upcast_ref::<gtk4::Widget>() == page {
+                    if let Some(ref path) = *editor.current_file.borrow() {
+                        file_explorer_clone3.borrow().highlight_file(path);
+                    }
+                    break;
+                }
             }
         });
     }

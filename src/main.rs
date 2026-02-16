@@ -1,5 +1,6 @@
 mod config;
 mod editor;
+mod file_explorer;
 mod highlight;
 mod ui;
 mod find_replace;
