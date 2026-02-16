@@ -476,7 +476,14 @@ pub fn build_ui(app: &Application) {
 
             // Load new syntax highlighting theme
             let ts = ThemeSet::load_defaults();
-            let new_theme = Rc::new(ts.themes[new_mode.syntax_theme_name()].clone());
+            let theme_name = new_mode.syntax_theme_name();
+            let new_theme = if let Some(theme) = ts.themes.get(theme_name) {
+                Rc::new(theme.clone())
+            } else {
+                // Fallback to first available theme if the named theme doesn't exist
+                eprintln!("Warning: Theme '{}' not found, using fallback", theme_name);
+                Rc::new(ts.themes.values().next().unwrap().clone())
+            };
             *current_theme_clone.borrow_mut() = new_theme.clone();
 
             // Update all open editors with the new theme

@@ -238,7 +238,7 @@ impl Editor {
             let buffer_cl = editor.main_buffer.clone();
             let tag_cache_cl = editor.tag_cache.clone();
             let ss_cl = ss.clone();
-            let theme_cl = editor.theme.clone();
+            let editor_cl = editor.clone();
             let gen_cl = highlight_gen.clone();
 
             rx.attach(None, move |(job_gen, text)| {
@@ -246,7 +246,7 @@ impl Editor {
                 if job_gen != cur {
                     return glib::Continue(false);
                 }
-                let current_theme = theme_cl.borrow().clone();
+                let current_theme = editor_cl.get_theme();
                 highlight::highlight_with_syntect(&buffer_cl, &text, &*tag_cache_cl, &ss_cl, &current_theme);
                 glib::Continue(false)
             });
@@ -710,6 +710,11 @@ impl Editor {
         self.tab_label.set_text(&base);
 
         Ok(())
+    }
+    
+    /// Get the current theme
+    fn get_theme(&self) -> Rc<Theme> {
+        self.theme.borrow().clone()
     }
     
     /// Update the theme and re-highlight the editor
