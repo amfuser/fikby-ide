@@ -82,6 +82,7 @@ impl Editor {
         gutter_view.style_context().add_class("gutter");
         gutter_view.set_halign(Align::End);
         gutter_view.set_valign(Align::Start);
+        gutter_view.set_justification(gtk4::Justification::Right);  // Right-align the line numbers
         
         // Match all spacing settings from main_view for perfect alignment
         gutter_view.set_pixels_above_lines(0);
@@ -497,14 +498,14 @@ impl Editor {
     fn update_line_numbers(&self) {
         let line_count = self.main_buffer.line_count();
         
-        let width = line_count.to_string().len();
-        let mut numbers = String::with_capacity(line_count as usize * (width + 2));
+        // Build line numbers string - no need for right-padding since TextView handles justification
+        let mut numbers = String::with_capacity(line_count as usize * 6);
         
         for i in 1..=line_count {
             if i > 1 {
                 numbers.push('\n');
             }
-            numbers.push_str(&format!("{:>width$}", i, width = width));
+            numbers.push_str(&i.to_string());
         }
         
         self.gutter_buffer.set_text(&numbers);
