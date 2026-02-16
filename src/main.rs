@@ -1,8 +1,12 @@
 mod config;
 mod editor;
+mod file_explorer;
 mod highlight;
 mod ui;
 mod find_replace;
+
+#[cfg(test)]
+mod tests;
 
 use gtk4::prelude::*;
 use gtk4::{gdk, Application, CssProvider};

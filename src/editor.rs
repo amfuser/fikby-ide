@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, Image, Label, ScrolledWindow, TextBuffer, TextView, WrapMode, PolicyType, Button};
-use gtk4::{gdk, EventControllerKey, Inhibit};
+use gtk4::{gdk, EventControllerKey, Inhibit, DrawingArea, Overlay};
 use gtk4::TextTag;
 use glib::clone;
 use std::cell::RefCell;
@@ -28,12 +28,12 @@ pub enum FileState {
     Saved(PathBuf),
 }
 
-/// Editor encapsulates a text editor view, gutter label, buffers and tag cache.
+/// Editor encapsulates a text editor view, line number drawing area, buffers and tag cache.
 #[allow(dead_code)]
 pub struct Editor {
     pub main_view: TextView,
     pub main_buffer: TextBuffer,
-    pub gutter_label: Label,
+    pub line_numbers: DrawingArea,
     pub content_row: GtkBox,
     pub header: GtkBox,
     pub tab_label: Label,
@@ -42,7 +42,7 @@ pub struct Editor {
     pub dirty: Rc<RefCell<bool>>,
     pub tag_cache: Rc<RefCell<HashMap<String, TextTag>>>,
     ss: Rc<SyntaxSet>,
-    theme: Rc<Theme>,
+    theme: Rc<RefCell<Rc<Theme>>>,
     rope: Rc<RefCell<Rope>>,
     highlight_gen: Arc<AtomicU64>,
     highlight_sender: glib::Sender<(u64, String)>,
@@ -64,7 +64,7 @@ impl Editor {
         main_view.set_pixels_inside_wrap(0);
         main_view.set_top_margin(0);
         main_view.set_bottom_margin(0);
-        main_view.set_left_margin(4);
+        main_view.set_left_margin(60);  // Leave space for line numbers
         main_view.set_right_margin(4);
         
         let main_buffer = main_view.buffer();
@@ -72,12 +72,12 @@ impl Editor {
         // Enable undo/redo
         main_buffer.set_enable_undo(true);
 
-        let gutter_label = Label::new(None);
-        gutter_label.style_context().add_class("gutter");
-        gutter_label.set_halign(Align::End);
-        gutter_label.set_valign(Align::Start);
-        gutter_label.set_yalign(0.0);
-        gutter_label.set_xalign(1.0);
+        // Create DrawingArea for line numbers - this is the robust approach
+        let line_numbers = DrawingArea::new();
+        line_numbers.set_width_request(55);  // Fixed width for line numbers
+        line_numbers.set_vexpand(true);
+        line_numbers.set_valign(Align::Fill);
+        line_numbers.style_context().add_class("gutter");
 
         let main_scrolled = ScrolledWindow::builder()
             .child(&main_view)
@@ -86,20 +86,17 @@ impl Editor {
             .vscrollbar_policy(PolicyType::Automatic)
             .build();
 
-        let gutter_scrolled = ScrolledWindow::builder()
-            .child(&gutter_label)
-            .min_content_height(200)
-            .hscrollbar_policy(PolicyType::Never)
-            .vscrollbar_policy(PolicyType::Automatic)
-            .min_content_width(60)
-            .build();
-
-        let vadj: gtk4::Adjustment = main_scrolled.vadjustment();
-        gutter_scrolled.set_vadjustment(Some(&vadj));
+        // Use Overlay to position line numbers over the editor's left margin
+        let overlay = Overlay::new();
+        overlay.set_child(Some(&main_scrolled));
+        overlay.add_overlay(&line_numbers);
+        
+        // Align line numbers to the left
+        line_numbers.set_halign(Align::Start);
+        line_numbers.set_valign(Align::Fill);
 
         let content_row = GtkBox::new(gtk4::Orientation::Horizontal, 0);
-        content_row.append(&gutter_scrolled);
-        content_row.append(&main_scrolled);
+        content_row.append(&overlay);
         content_row.set_hexpand(true);
         content_row.set_vexpand(true);
 
@@ -111,6 +108,9 @@ impl Editor {
         header.set_margin_end(4);
         header.set_margin_top(4);
         header.set_margin_bottom(4);
+        // Set minimum height to prevent negative height calculations when window is resized
+        // This fixes GTK warning: "GtkGizmo (tabs) reported min height -3"
+        header.set_height_request(28);
 
         // file icon (try to use a source/text icon; theme-dependent)
         let file_icon = Image::from_icon_name("text-x-generic");
@@ -147,6 +147,11 @@ impl Editor {
         close_btn.set_has_frame(false); // Remove button frame for cleaner look
         header.append(&close_btn);
 
+        // Set minimum height to prevent negative height calculations during window resize
+        // Ensures tabs always have adequate space: icon(16px) + margins(8px) + buffer(4px) = 28px
+        // This prevents GTK warning: "GtkGizmo (tabs) reported min height -3"
+        header.set_height_request(28);
+
         if let Some(t) = initial_text.clone() {
             main_buffer.set_text(&t);
         }
@@ -164,18 +169,18 @@ impl Editor {
         let (tx, rx) = glib::MainContext::channel::<(u64, String)>(glib::Priority::default());
 
         let editor = Rc::new(Self {
-            main_view,
-            main_buffer,
-            gutter_label,
+            main_view: main_view.clone(),
+            main_buffer: main_buffer.clone(),
+            line_numbers: line_numbers.clone(),
             content_row,
             header,
             tab_label: tab_label.clone(),
             close_button: close_btn.clone(),
-            current_file,
-            dirty,
+            current_file: current_file.clone(),
+            dirty: dirty.clone(),
             tag_cache,
             ss: ss.clone(),
-            theme: theme.clone(),
+            theme: Rc::new(RefCell::new(theme.clone())),
             rope: rope.clone(),
             highlight_gen: highlight_gen.clone(),
             highlight_sender: tx.clone(),
@@ -238,7 +243,7 @@ impl Editor {
             let buffer_cl = editor.main_buffer.clone();
             let tag_cache_cl = editor.tag_cache.clone();
             let ss_cl = ss.clone();
-            let theme_cl = theme.clone();
+            let editor_cl = editor.clone();
             let gen_cl = highlight_gen.clone();
 
             rx.attach(None, move |(job_gen, text)| {
@@ -246,7 +251,8 @@ impl Editor {
                 if job_gen != cur {
                     return glib::Continue(false);
                 }
-                highlight::highlight_with_syntect(&buffer_cl, &text, &*tag_cache_cl, &ss_cl, &theme_cl);
+                let current_theme = editor_cl.get_theme();
+                highlight::highlight_with_syntect(&buffer_cl, &text, &*tag_cache_cl, &ss_cl, &current_theme);
                 glib::Continue(false)
             });
         }
@@ -296,11 +302,92 @@ impl Editor {
         }
 
         // Mark dirty
+        // Setup draw function for line numbers DrawingArea
         {
-            let dirty_clone = editor.dirty.clone();
-            let tab_label_clone = editor.tab_label.clone();
-            let current_file_clone = editor.current_file.clone();
-            editor.main_buffer.connect_changed(move |_| {
+            let buffer_clone = main_buffer.clone();
+            let view_clone = main_view.clone();
+            
+            line_numbers.set_draw_func(clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, height| {
+                // Only draw visible line numbers for performance
+                // Critical: This prevents window expansion and hangs with large files
+                
+                // Get the visible rectangle (what's actually on screen)
+                let visible_rect = view_clone.visible_rect();
+                let top_y = visible_rect.y();
+                let bottom_y = top_y + visible_rect.height();
+                
+                // Find which lines are visible
+                // iter_at_location returns Option<TextIter> in GTK4
+                let top_iter = view_clone.iter_at_location(0, top_y);
+                let bottom_iter = view_clone.iter_at_location(0, bottom_y);
+                
+                let first_line = top_iter.map(|iter| iter.line()).unwrap_or(0);
+                let last_line = bottom_iter.map(|iter| iter.line()).unwrap_or(buffer_clone.line_count() - 1);
+                
+                // Setup Pango for text rendering
+                let pango_context = view_clone.pango_context();
+                let font_desc = pango_context.font_description().unwrap();
+                let layout = gtk4::pango::Layout::new(&pango_context);
+                layout.set_font_description(Some(&font_desc));
+                layout.set_alignment(gtk4::pango::Alignment::Right);
+                layout.set_width((width - 10) * gtk4::pango::SCALE);
+                
+                // Get text color from theme
+                let style_context = view_clone.style_context();
+                let fg_color = style_context.color();
+                cr.set_source_rgba(
+                    fg_color.red() as f64,
+                    fg_color.green() as f64,
+                    fg_color.blue() as f64,
+                    fg_color.alpha() as f64
+                );
+                
+                // Draw ONLY visible line numbers (typically ~50-100 lines)
+                for line_num in first_line..=last_line {
+                    if let Some(iter) = buffer_clone.iter_at_line(line_num) {
+                        let location = view_clone.iter_location(&iter);
+                        let (_, window_y) = view_clone.buffer_to_window_coords(
+                            gtk4::TextWindowType::Widget,
+                            0,
+                            location.y()
+                        );
+                        
+                        // Only draw if within the DrawingArea bounds
+                        if window_y >= 0 && window_y < height {
+                            layout.set_text(&(line_num + 1).to_string());
+                            cr.move_to(5.0, window_y as f64);
+                            pangocairo::functions::show_layout(cr, &layout);
+                        }
+                    }
+                }
+            }));
+        }
+
+        // Update line numbers when buffer changes
+        {
+            let line_numbers_clone = line_numbers.clone();
+            
+            main_buffer.connect_changed(move |_| {
+                line_numbers_clone.queue_draw();
+            });
+        }
+
+        // Update line numbers when scrolling
+        {
+            let line_numbers_clone = line_numbers.clone();
+            let vadj = main_scrolled.vadjustment();
+            
+            vadj.connect_value_changed(move |_| {
+                line_numbers_clone.queue_draw();
+            });
+        }
+
+        // Mark dirty on change
+        {
+            let dirty_clone = dirty.clone();
+            let tab_label_clone = tab_label.clone();
+            let current_file_clone = current_file.clone();
+            main_buffer.connect_changed(move |_| {
                 *dirty_clone.borrow_mut() = true;
                 let base = current_file_clone
                     .borrow()
@@ -309,42 +396,6 @@ impl Editor {
                     .unwrap_or("Untitled")
                     .to_string();
                 tab_label_clone.set_text(&format!("*{}", base));
-            });
-        }
-
-        // Update gutter
-        {
-            let gutter_label_clone = editor.gutter_label.clone();
-            let buffer_clone = editor.main_buffer.clone();
-            
-            editor.main_buffer.connect_changed(move |_| {
-                let s = buffer_clone.start_iter();
-                let e = buffer_clone.end_iter();
-                let content = buffer_clone.text(&s, &e, false);
-
-                let line_count = if content.is_empty() {
-                    1
-                } else {
-                    let text_str = content.as_str();
-                    let newline_count = text_str.chars().filter(|&c| c == '\n').count();
-                    if text_str.ends_with('\n') {
-                        newline_count
-                    } else {
-                        newline_count + 1
-                    }
-                };
-                
-                let width = line_count.to_string().len();
-                let mut numbers = String::with_capacity(line_count * (width + 2));
-                
-                for i in 1..=line_count {
-                    if i > 1 {
-                        numbers.push('\n');
-                    }
-                    numbers.push_str(&format!("{:>width$}", i, width = width));
-                }
-                
-                gutter_label_clone.set_text(&numbers);
             });
         }
 
@@ -361,6 +412,9 @@ impl Editor {
                 }));
             });
         }
+
+        // Initial draw of line numbers
+        editor.line_numbers.queue_draw();
 
         editor
     }
@@ -498,6 +552,59 @@ impl Editor {
         }
     }
 
+    /// Update the line numbers in the gutter
+    /// Update the status bar with current cursor position and file info
+    fn update_status_bar(&self, status_label: &Label, status_info_label: &Label, content: &str) {
+        let ins = self.main_buffer.get_insert();
+        let it = self.main_buffer.iter_at_mark(&ins);
+        let line = it.line();
+        let col = it.line_offset();
+        status_label.set_text(&format!("Ln {}, Col {}", line + 1, col + 1));
+
+        let info = if let Some(p) = self.current_file.borrow().as_ref() {
+            if let Ok(meta) = std::fs::metadata(p) {
+                let size = meta.len();
+                format!("{} — {} bytes", p.display(), size)
+            } else {
+                format!("{}", p.display())
+            }
+        } else {
+            let len = content.len();
+            format!("Untitled — {} bytes", len)
+        };
+        status_info_label.set_text(&info);
+    }
+
+    /// Trigger syntax highlighting for the current buffer content
+    fn trigger_highlighting(&self, content: &str) {
+        let do_highlight = self
+            .current_file
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.extension().and_then(|s| s.to_str()))
+            .map(|ext| matches!(ext, "rs" | "py" | "js" | "ts" | "json" | "toml" | "md" | "html" | "css" | "xml"))
+            .unwrap_or(true);
+
+        const HIGHLIGHT_MAX_CHARS: usize = 200_000;
+        if content.chars().count() > HIGHLIGHT_MAX_CHARS {
+            return;
+        }
+
+        if do_highlight {
+            let buffer = self.main_buffer.clone();
+            let content_clone = content.to_string();
+            let tag_cache = self.tag_cache.clone();
+            let ss = self.ss.clone();
+            let theme = self.theme.clone();
+
+            glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
+                let theme_ref = theme.borrow();
+                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
+                glib::Continue(false)
+            }));
+        }
+    }
+
     pub fn undo(&self) {
         if self.main_buffer.can_undo() {
             self.main_buffer.undo();
@@ -592,79 +699,21 @@ impl Editor {
         count
     }
 
+    /// Update the editor display: line numbers, status bar, and syntax highlighting
     pub fn update(&self, status_label: &Label, status_info_label: &Label) {
+        // Redraw line numbers
+        self.line_numbers.queue_draw();
+
+        // Get buffer content for status display and syntax highlighting
         let s = self.main_buffer.start_iter();
         let e = self.main_buffer.end_iter();
         let content = self.main_buffer.text(&s, &e, false);
 
-        let line_count = if content.is_empty() {
-            1
-        } else {
-            let text_str = content.as_str();
-            let newline_count = text_str.chars().filter(|&c| c == '\n').count();
-            if text_str.ends_with('\n') {
-                newline_count
-            } else {
-                newline_count + 1
-            }
-        };
-        
-        let width = line_count.to_string().len();
-        let mut numbers = String::with_capacity(line_count * (width + 2));
-        
-        for i in 1..=line_count {
-            if i > 1 {
-                numbers.push('\n');
-            }
-            numbers.push_str(&format!("{:>width$}", i, width = width));
-        }
-        
-        self.gutter_label.set_text(&numbers);
+        // Update status bar
+        self.update_status_bar(status_label, status_info_label, &content);
 
-        let ins = self.main_buffer.get_insert();
-        let it = self.main_buffer.iter_at_mark(&ins);
-        let line = it.line();
-        let col = it.line_offset();
-        status_label.set_text(&format!("Ln {}, Col {}", line + 1, col + 1));
-
-        let info = if let Some(p) = self.current_file.borrow().as_ref() {
-            if let Ok(meta) = std::fs::metadata(p) {
-                let size = meta.len();
-                format!("{} — {} bytes", p.display(), size)
-            } else {
-                format!("{}", p.display())
-            }
-        } else {
-            let len = content.len();
-            format!("Untitled — {} bytes", len)
-        };
-        status_info_label.set_text(&info);
-
-        let do_highlight = self
-            .current_file
-            .borrow()
-            .as_ref()
-            .and_then(|p| p.extension().and_then(|s| s.to_str()))
-            .map(|ext| matches!(ext, "rs" | "py" | "js" | "ts" | "json" | "toml" | "md" | "html" | "css" | "xml"))
-            .unwrap_or(true);
-
-        const HIGHLIGHT_MAX_CHARS: usize = 200_000;
-        if content.chars().count() > HIGHLIGHT_MAX_CHARS {
-            return;
-        }
-
-        if do_highlight {
-            let buffer = self.main_buffer.clone();
-            let content_clone = content.to_string();
-            let tag_cache = self.tag_cache.clone();
-            let ss = self.ss.clone();
-            let theme = self.theme.clone();
-
-            glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
-                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &theme);
-                glib::Continue(false)
-            }));
-        }
+        // Trigger syntax highlighting
+        self.trigger_highlighting(&content);
     }
 
     pub fn toggle_wrap(&self) {
@@ -709,5 +758,19 @@ impl Editor {
         self.tab_label.set_text(&base);
 
         Ok(())
+    }
+    
+    /// Get the current theme
+    fn get_theme(&self) -> Rc<Theme> {
+        self.theme.borrow().clone()
+    }
+    
+    /// Update the theme and re-highlight the editor
+    pub fn set_theme(&self, new_theme: Rc<Theme>) {
+        *self.theme.borrow_mut() = new_theme;
+        // Trigger re-highlighting by incrementing the generation counter and sending current text
+        let gen = self.highlight_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        let text = self.get_text();
+        let _ = self.highlight_sender.send((gen, text));
     }
 }
