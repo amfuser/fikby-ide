@@ -147,6 +147,11 @@ impl Editor {
         close_btn.set_has_frame(false); // Remove button frame for cleaner look
         header.append(&close_btn);
 
+        // Set minimum height to prevent negative height calculations during window resize
+        // Ensures tabs always have adequate space: icon(16px) + margins(8px) + buffer(4px) = 28px
+        // This prevents GTK warning: "GtkGizmo (tabs) reported min height -3"
+        header.set_height_request(28);
+
         if let Some(t) = initial_text.clone() {
             main_buffer.set_text(&t);
         }
