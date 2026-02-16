@@ -85,6 +85,9 @@ pub fn build_ui(app: &Application) {
     notebook.set_scrollable(true);
     notebook.set_vexpand(true);
     notebook.set_hexpand(true);
+    // Set minimum height to prevent negative tab height calculations during window resize
+    // This prevents GTK warning about negative min-height and window minimize issues
+    notebook.set_size_request(-1, 100);
 
     // Status bar
     let status_bar = GtkBox::new(Orientation::Horizontal, 10);

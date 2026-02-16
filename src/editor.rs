@@ -127,6 +127,9 @@ impl Editor {
         header.set_margin_end(4);
         header.set_margin_top(4);
         header.set_margin_bottom(4);
+        // Set minimum height to prevent negative height calculations when window is resized
+        // This fixes GTK warning: "GtkGizmo (tabs) reported min height -3"
+        header.set_height_request(28);
 
         // file icon (try to use a source/text icon; theme-dependent)
         let file_icon = Image::from_icon_name("text-x-generic");
