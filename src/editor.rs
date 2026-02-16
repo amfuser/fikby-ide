@@ -318,24 +318,10 @@ impl Editor {
 
         // Update gutter
         {
-            let gutter_label_clone = editor.gutter_label.clone();
-            let buffer_clone = editor.main_buffer.clone();
+            let editor_clone = editor.clone();
             
             editor.main_buffer.connect_changed(move |_| {
-                // Use GTK's built-in line_count which properly handles all edge cases
-                let line_count = buffer_clone.line_count();
-                
-                let width = line_count.to_string().len();
-                let mut numbers = String::with_capacity(line_count as usize * (width + 2));
-                
-                for i in 1..=line_count {
-                    if i > 1 {
-                        numbers.push('\n');
-                    }
-                    numbers.push_str(&format!("{:>width$}", i, width = width));
-                }
-                
-                gutter_label_clone.set_text(&numbers);
+                editor_clone.update_line_numbers();
             });
         }
 
@@ -489,6 +475,75 @@ impl Editor {
         }
     }
 
+    /// Update the line numbers in the gutter
+    fn update_line_numbers(&self) {
+        let line_count = self.main_buffer.line_count();
+        
+        let width = line_count.to_string().len();
+        let mut numbers = String::with_capacity(line_count as usize * (width + 2));
+        
+        for i in 1..=line_count {
+            if i > 1 {
+                numbers.push('\n');
+            }
+            numbers.push_str(&format!("{:>width$}", i, width = width));
+        }
+        
+        self.gutter_label.set_text(&numbers);
+    }
+
+    /// Update the status bar with current cursor position and file info
+    fn update_status_bar(&self, status_label: &Label, status_info_label: &Label, content: &str) {
+        let ins = self.main_buffer.get_insert();
+        let it = self.main_buffer.iter_at_mark(&ins);
+        let line = it.line();
+        let col = it.line_offset();
+        status_label.set_text(&format!("Ln {}, Col {}", line + 1, col + 1));
+
+        let info = if let Some(p) = self.current_file.borrow().as_ref() {
+            if let Ok(meta) = std::fs::metadata(p) {
+                let size = meta.len();
+                format!("{} — {} bytes", p.display(), size)
+            } else {
+                format!("{}", p.display())
+            }
+        } else {
+            let len = content.len();
+            format!("Untitled — {} bytes", len)
+        };
+        status_info_label.set_text(&info);
+    }
+
+    /// Trigger syntax highlighting for the current buffer content
+    fn trigger_highlighting(&self, content: &str) {
+        let do_highlight = self
+            .current_file
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.extension().and_then(|s| s.to_str()))
+            .map(|ext| matches!(ext, "rs" | "py" | "js" | "ts" | "json" | "toml" | "md" | "html" | "css" | "xml"))
+            .unwrap_or(true);
+
+        const HIGHLIGHT_MAX_CHARS: usize = 200_000;
+        if content.chars().count() > HIGHLIGHT_MAX_CHARS {
+            return;
+        }
+
+        if do_highlight {
+            let buffer = self.main_buffer.clone();
+            let content_clone = content.to_string();
+            let tag_cache = self.tag_cache.clone();
+            let ss = self.ss.clone();
+            let theme = self.theme.clone();
+
+            glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
+                let theme_ref = theme.borrow();
+                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
+                glib::Continue(false)
+            }));
+        }
+    }
+
     pub fn undo(&self) {
         if self.main_buffer.can_undo() {
             self.main_buffer.undo();
@@ -583,72 +638,21 @@ impl Editor {
         count
     }
 
+    /// Update the editor display: line numbers, status bar, and syntax highlighting
     pub fn update(&self, status_label: &Label, status_info_label: &Label) {
-        // Use GTK's built-in line_count which properly handles all edge cases
-        let line_count = self.main_buffer.line_count();
-        
-        let width = line_count.to_string().len();
-        let mut numbers = String::with_capacity(line_count as usize * (width + 2));
-        
-        for i in 1..=line_count {
-            if i > 1 {
-                numbers.push('\n');
-            }
-            numbers.push_str(&format!("{:>width$}", i, width = width));
-        }
-        
-        self.gutter_label.set_text(&numbers);
+        // Update line numbers
+        self.update_line_numbers();
 
         // Get buffer content for status display and syntax highlighting
         let s = self.main_buffer.start_iter();
         let e = self.main_buffer.end_iter();
         let content = self.main_buffer.text(&s, &e, false);
 
-        let ins = self.main_buffer.get_insert();
-        let it = self.main_buffer.iter_at_mark(&ins);
-        let line = it.line();
-        let col = it.line_offset();
-        status_label.set_text(&format!("Ln {}, Col {}", line + 1, col + 1));
+        // Update status bar
+        self.update_status_bar(status_label, status_info_label, &content);
 
-        let info = if let Some(p) = self.current_file.borrow().as_ref() {
-            if let Ok(meta) = std::fs::metadata(p) {
-                let size = meta.len();
-                format!("{} — {} bytes", p.display(), size)
-            } else {
-                format!("{}", p.display())
-            }
-        } else {
-            let len = content.len();
-            format!("Untitled — {} bytes", len)
-        };
-        status_info_label.set_text(&info);
-
-        let do_highlight = self
-            .current_file
-            .borrow()
-            .as_ref()
-            .and_then(|p| p.extension().and_then(|s| s.to_str()))
-            .map(|ext| matches!(ext, "rs" | "py" | "js" | "ts" | "json" | "toml" | "md" | "html" | "css" | "xml"))
-            .unwrap_or(true);
-
-        const HIGHLIGHT_MAX_CHARS: usize = 200_000;
-        if content.chars().count() > HIGHLIGHT_MAX_CHARS {
-            return;
-        }
-
-        if do_highlight {
-            let buffer = self.main_buffer.clone();
-            let content_clone = content.to_string();
-            let tag_cache = self.tag_cache.clone();
-            let ss = self.ss.clone();
-            let theme = self.theme.clone();
-
-            glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
-                let theme_ref = theme.borrow();
-                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
-                glib::Continue(false)
-            }));
-        }
+        // Trigger syntax highlighting
+        self.trigger_highlighting(&content);
     }
 
     pub fn toggle_wrap(&self) {
