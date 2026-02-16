@@ -189,10 +189,10 @@ impl FileExplorer {
     pub fn highlight_file(&self, file_path: &Path) {
         // Find and select the file in the tree
         if let Some(iter) = self.find_iter_for_path(file_path, None) {
-            if let Some(path) = self.tree_store.path(&iter) {
-                self.tree_view.selection().select_path(&path);
-                self.tree_view.scroll_to_cell(Some(&path), None::<&TreeViewColumn>, false, 0.0, 0.0);
-            }
+            // GTK4: path() returns TreePath directly, not Option<TreePath>
+            let path = self.tree_store.path(&iter);
+            self.tree_view.selection().select_path(&path);
+            self.tree_view.scroll_to_cell(Some(&path), None::<&TreeViewColumn>, false, 0.0, 0.0);
         }
     }
 
@@ -205,13 +205,14 @@ impl FileExplorer {
 
         if let Some(mut current_iter) = iter {
             loop {
-                let path: String = self.tree_store.value(&current_iter, COL_PATH as i32).get().ok()?;
+                // GTK4: Use get() instead of value().get()
+                let path: String = self.tree_store.get(&current_iter, COL_PATH as i32);
                 if PathBuf::from(&path) == target_path {
                     return Some(current_iter);
                 }
 
                 // Check children if it's a directory
-                let is_dir: bool = self.tree_store.value(&current_iter, COL_IS_DIR as i32).get().unwrap_or(false);
+                let is_dir: bool = self.tree_store.get(&current_iter, COL_IS_DIR as i32);
                 if is_dir {
                     if let Some(found) = self.find_iter_for_path(target_path, Some(&current_iter)) {
                         return Some(found);
