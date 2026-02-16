@@ -8,7 +8,7 @@ The file explorer required migrating from GTK3 APIs to GTK4 APIs. This guide doc
 
 ## Total Changes
 
-- **7 API method changes** (TreeModel/TreeStore)
+- **9 API method changes** (TreeModel/TreeStore)
 - **3 import changes** (Menu/MenuItem removal, unused imports)
 - **0 compilation errors** after migration
 
@@ -142,6 +142,42 @@ model.value(&iter, COL_IS_DIR as i32).get().unwrap_or(false)
 ```rust
 model.get(&iter, COL_IS_DIR as i32)
 ```
+
+---
+
+### 8. TreeStore.get() - Context Menu File Path
+
+**Location**: `src/file_explorer.rs:261` (setup_context_menu method)
+
+**GTK3 (Old):**
+```rust
+let file_path: String = tree_store.value(&iter, COL_PATH as i32).get().unwrap_or_default();
+```
+
+**GTK4 (New):**
+```rust
+let file_path: String = tree_store.get(&iter, COL_PATH as i32);
+```
+
+**Why**: GTK4's `get()` method returns the default value for the type if not found, so no need for `.unwrap_or_default()`.
+
+---
+
+### 9. TreeStore.get() - Context Menu Directory Check
+
+**Location**: `src/file_explorer.rs:262` (setup_context_menu method)
+
+**GTK3 (Old):**
+```rust
+let is_dir: bool = tree_store.value(&iter, COL_IS_DIR as i32).get().unwrap_or(false);
+```
+
+**GTK4 (New):**
+```rust
+let is_dir: bool = tree_store.get(&iter, COL_IS_DIR as i32);
+```
+
+**Why**: Same as above - GTK4's `get()` returns the default value (false for bool) if not found.
 
 ---
 
