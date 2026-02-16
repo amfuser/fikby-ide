@@ -42,7 +42,7 @@ pub struct Editor {
     pub dirty: Rc<RefCell<bool>>,
     pub tag_cache: Rc<RefCell<HashMap<String, TextTag>>>,
     ss: Rc<SyntaxSet>,
-    theme: Rc<Theme>,
+    theme: Rc<RefCell<Rc<Theme>>>,
     rope: Rc<RefCell<Rope>>,
     highlight_gen: Arc<AtomicU64>,
     highlight_sender: glib::Sender<(u64, String)>,
@@ -175,7 +175,7 @@ impl Editor {
             dirty,
             tag_cache,
             ss: ss.clone(),
-            theme: theme.clone(),
+            theme: Rc::new(RefCell::new(theme.clone())),
             rope: rope.clone(),
             highlight_gen: highlight_gen.clone(),
             highlight_sender: tx.clone(),
@@ -238,7 +238,7 @@ impl Editor {
             let buffer_cl = editor.main_buffer.clone();
             let tag_cache_cl = editor.tag_cache.clone();
             let ss_cl = ss.clone();
-            let theme_cl = theme.clone();
+            let theme_cl = editor.theme.clone();
             let gen_cl = highlight_gen.clone();
 
             rx.attach(None, move |(job_gen, text)| {
@@ -246,7 +246,8 @@ impl Editor {
                 if job_gen != cur {
                     return glib::Continue(false);
                 }
-                highlight::highlight_with_syntect(&buffer_cl, &text, &*tag_cache_cl, &ss_cl, &theme_cl);
+                let current_theme = theme_cl.borrow().clone();
+                highlight::highlight_with_syntect(&buffer_cl, &text, &*tag_cache_cl, &ss_cl, &current_theme);
                 glib::Continue(false)
             });
         }
@@ -709,5 +710,14 @@ impl Editor {
         self.tab_label.set_text(&base);
 
         Ok(())
+    }
+    
+    /// Update the theme and re-highlight the editor
+    pub fn set_theme(&self, new_theme: Rc<Theme>) {
+        *self.theme.borrow_mut() = new_theme;
+        // Trigger re-highlighting by incrementing the generation counter and sending current text
+        let gen = self.highlight_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        let text = self.get_text();
+        let _ = self.highlight_sender.send((gen, text));
     }
 }

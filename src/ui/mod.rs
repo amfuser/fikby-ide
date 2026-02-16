@@ -7,16 +7,21 @@ use gtk4::gio::SimpleAction;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use syntect::highlighting::ThemeSet;
+use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
 use crate::editor::Editor;
 use crate::find_replace::FindReplaceDialog;
+use crate::config::ThemeMode;
 
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
     let ts = ThemeSet::load_defaults();
+    
+    // Theme state management
+    let current_theme_mode: Rc<RefCell<ThemeMode>> = Rc::new(RefCell::new(ThemeMode::Dark));
     let theme = Rc::new(ts.themes["base16-ocean.dark"].clone());
+    let current_theme: Rc<RefCell<Rc<Theme>>> = Rc::new(RefCell::new(theme.clone()));
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -108,12 +113,13 @@ pub fn build_ui(app: &Application) {
         let editors_clone = editors.clone();
         let current_editor_clone = current_editor.clone();
         let ss_clone = ss.clone();
-        let theme_clone = theme.clone();
+        let current_theme_clone = current_theme.clone();
         let status_label_clone = status_label.clone();
         let status_info_label_clone = status_info_label.clone();
 
         action.connect_activate(move |_, _| {
-            let editor = Editor::new("Untitled", None, None, ss_clone.clone(), theme_clone.clone());
+            let theme_clone = current_theme_clone.borrow().clone();
+            let editor = Editor::new("Untitled", None, None, ss_clone.clone(), theme_clone);
             
             let page_index = notebook_clone.append_page(
                 &editor.content_row(),
@@ -150,7 +156,7 @@ pub fn build_ui(app: &Application) {
         let editors_clone = editors.clone();
         let current_editor_clone = current_editor.clone();
         let ss_clone = ss.clone();
-        let theme_clone = theme.clone();
+        let current_theme_clone = current_theme.clone();
         let status_label_clone = status_label.clone();
         let status_info_label_clone = status_info_label.clone();
 
@@ -166,7 +172,7 @@ pub fn build_ui(app: &Application) {
             let editors_clone2 = editors_clone.clone();
             let current_editor_clone2 = current_editor_clone.clone();
             let ss_clone2 = ss_clone.clone();
-            let theme_clone2 = theme_clone.clone();
+            let current_theme_clone2 = current_theme_clone.clone();
             let status_label_clone2 = status_label_clone.clone();
             let status_info_label_clone2 = status_info_label_clone.clone();
 
@@ -175,12 +181,13 @@ pub fn build_ui(app: &Application) {
                     if let Some(file) = dialog.file() {
                         if let Some(path) = file.path() {
                             if let Ok(content) = std::fs::read_to_string(&path) {
+                                let theme_clone = current_theme_clone2.borrow().clone();
                                 let editor = Editor::new(
                                     "File",
                                     Some(content),
                                     Some(path.clone()),
                                     ss_clone2.clone(),
-                                    theme_clone2.clone(),
+                                    theme_clone,
                                 );
 
                                 let page_index = notebook_clone2.append_page(
@@ -446,6 +453,41 @@ pub fn build_ui(app: &Application) {
         app.add_action(&action);
     }
 
+    // TOGGLE THEME ACTION
+    {
+        let action = SimpleAction::new("toggle-theme", None);
+        let current_theme_mode_clone = current_theme_mode.clone();
+        let current_theme_clone = current_theme.clone();
+        let editors_clone = editors.clone();
+
+        action.connect_activate(move |_, _| {
+            // Toggle theme mode
+            let new_mode = {
+                let mut mode = current_theme_mode_clone.borrow_mut();
+                *mode = match *mode {
+                    ThemeMode::Dark => ThemeMode::Light,
+                    ThemeMode::Light => ThemeMode::Dark,
+                };
+                *mode
+            };
+
+            // Update CSS
+            crate::load_css(new_mode);
+
+            // Load new syntax highlighting theme
+            let ts = ThemeSet::load_defaults();
+            let new_theme = Rc::new(ts.themes[new_mode.syntax_theme_name()].clone());
+            *current_theme_clone.borrow_mut() = new_theme.clone();
+
+            // Update all open editors with the new theme
+            for editor in editors_clone.borrow().iter() {
+                editor.set_theme(new_theme.clone());
+            }
+        });
+
+        app.add_action(&action);
+    }
+
     // Update current editor when switching tabs
     {
         let current_editor_clone = current_editor.clone();
@@ -478,6 +520,7 @@ pub fn build_ui(app: &Application) {
     app.set_accels_for_action("app.paste", &["<Ctrl>V"]);
     app.set_accels_for_action("app.find", &["<Ctrl>F"]);
     app.set_accels_for_action("app.replace", &["<Ctrl>H"]);
+    app.set_accels_for_action("app.toggle-theme", &["<Ctrl>T"]);
 
     // Create initial empty tab
     let initial_editor = Editor::new("Untitled", None, None, ss.clone(), theme.clone());
@@ -548,6 +591,7 @@ fn create_view_menu() -> MenuButton {
 
     let menu = gtk4::gio::Menu::new();
     menu.append(Some("Toggle Word Wrap"), Some("app.toggle-wrap"));
+    menu.append(Some("Toggle Theme"), Some("app.toggle-theme"));
 
     let popover = PopoverMenu::from_model(Some(&menu));
     menu_button.set_popover(Some(&popover));
