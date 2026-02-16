@@ -8,7 +8,7 @@ pub const CSS: &str = r#"
 }
 .menubutton {
     font-weight: 600;
-    padding: 6px 10px;
+    padding: 2px 1px;
     border-radius: 4px;
 }
 .menubutton:hover {
@@ -25,7 +25,7 @@ pub const CSS: &str = r#"
     padding-right: 6px;
     font-family: monospace;
     font-size: 10pt;
-    line-height: .9928;
+    line-height: .994;
 }
 .editor-view {
     font-family: monospace;
@@ -37,6 +37,5 @@ pub const CSS: &str = r#"
     font-family: monospace;
 }
 "#;
-
 // Highlighting cutoff to avoid UI stalls on huge files
 pub const HIGHLIGHT_CHAR_CUTOFF: usize = 200_000;
