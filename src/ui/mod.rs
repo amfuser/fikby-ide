@@ -1,7 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Label,
+    Application, ApplicationWindow, Box as GtkBox, Button, Label, Entry, Dialog, ResponseType,
     MenuButton, Notebook, Orientation, Paned, PolicyType, PopoverMenu, ScrolledWindow,
+    MessageDialog, MessageType, ButtonsType,
 };
 use gtk4::gio::SimpleAction;
 use std::cell::RefCell;
@@ -79,6 +80,9 @@ pub fn build_ui(app: &Application) {
     // We need to make it mutable, so we'll use Rc<RefCell<>>
     let file_explorer_rc = Rc::new(std::cell::RefCell::new(file_explorer));
     file_explorer_rc.borrow_mut().set_root_directory(root_dir);
+    
+    // Setup context menu (will be connected to actions later)
+    file_explorer_rc.borrow().setup_context_menu(app);
 
     paned.set_start_child(Some(&file_explorer_rc.borrow().widget));
     paned.set_resize_start_child(false);
@@ -640,6 +644,192 @@ pub fn build_ui(app: &Application) {
                 }
             }
         });
+    }
+
+    // File Explorer Context Menu Actions
+    {
+        // NEW FILE ACTION
+        let action = SimpleAction::new("explorer-new-file", None);
+        let window_clone = window.clone();
+        let file_explorer_clone = file_explorer_rc.clone();
+
+        action.connect_activate(move |_, _| {
+            if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
+                let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
+                    selected_path.clone()
+                } else {
+                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                };
+
+                // Create dialog for file name input
+                let dialog = Dialog::with_buttons(
+                    Some("New File"),
+                    Some(&window_clone),
+                    gtk4::DialogFlags::MODAL,
+                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                );
+
+                let content_area = dialog.content_area();
+                let entry = Entry::new();
+                entry.set_placeholder_text(Some("filename.txt"));
+                entry.set_margin_top(10);
+                entry.set_margin_bottom(10);
+                entry.set_margin_start(10);
+                entry.set_margin_end(10);
+                content_area.append(&entry);
+
+                let file_explorer_clone2 = file_explorer_clone.clone();
+                dialog.connect_response(move |dialog, response| {
+                    if response == ResponseType::Accept {
+                        let file_name = entry.text();
+                        if !file_name.is_empty() {
+                            if let Err(e) = file_explorer_clone2.borrow().create_file(&parent_dir, &file_name) {
+                                eprintln!("Failed to create file: {}", e);
+                            }
+                        }
+                    }
+                    dialog.close();
+                });
+
+                dialog.show();
+            }
+        });
+
+        app.add_action(&action);
+
+        // NEW FOLDER ACTION
+        let action = SimpleAction::new("explorer-new-folder", None);
+        let window_clone = window.clone();
+        let file_explorer_clone = file_explorer_rc.clone();
+
+        action.connect_activate(move |_, _| {
+            if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
+                let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
+                    selected_path.clone()
+                } else {
+                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                };
+
+                // Create dialog for folder name input
+                let dialog = Dialog::with_buttons(
+                    Some("New Folder"),
+                    Some(&window_clone),
+                    gtk4::DialogFlags::MODAL,
+                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                );
+
+                let content_area = dialog.content_area();
+                let entry = Entry::new();
+                entry.set_placeholder_text(Some("folder_name"));
+                entry.set_margin_top(10);
+                entry.set_margin_bottom(10);
+                entry.set_margin_start(10);
+                entry.set_margin_end(10);
+                content_area.append(&entry);
+
+                let file_explorer_clone2 = file_explorer_clone.clone();
+                dialog.connect_response(move |dialog, response| {
+                    if response == ResponseType::Accept {
+                        let folder_name = entry.text();
+                        if !folder_name.is_empty() {
+                            if let Err(e) = file_explorer_clone2.borrow().create_directory(&parent_dir, &folder_name) {
+                                eprintln!("Failed to create folder: {}", e);
+                            }
+                        }
+                    }
+                    dialog.close();
+                });
+
+                dialog.show();
+            }
+        });
+
+        app.add_action(&action);
+
+        // DELETE ACTION
+        let action = SimpleAction::new("explorer-delete", None);
+        let window_clone = window.clone();
+        let file_explorer_clone = file_explorer_rc.clone();
+
+        action.connect_activate(move |_, _| {
+            if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
+                let file_name = selected_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("this item");
+
+                // Create confirmation dialog
+                let dialog = MessageDialog::new(
+                    Some(&window_clone),
+                    gtk4::DialogFlags::MODAL,
+                    MessageType::Question,
+                    ButtonsType::YesNo,
+                    &format!("Are you sure you want to delete '{}'?", file_name),
+                );
+
+                let file_explorer_clone2 = file_explorer_clone.clone();
+                let selected_path_clone = selected_path.clone();
+                dialog.connect_response(move |dialog, response| {
+                    if response == ResponseType::Yes {
+                        if let Err(e) = file_explorer_clone2.borrow().delete_file(&selected_path_clone) {
+                            eprintln!("Failed to delete: {}", e);
+                        }
+                    }
+                    dialog.close();
+                });
+
+                dialog.show();
+            }
+        });
+
+        app.add_action(&action);
+
+        // RENAME ACTION
+        let action = SimpleAction::new("explorer-rename", None);
+        let window_clone = window.clone();
+        let file_explorer_clone = file_explorer_rc.clone();
+
+        action.connect_activate(move |_, _| {
+            if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
+                let current_name = selected_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                // Create dialog for new name input
+                let dialog = Dialog::with_buttons(
+                    Some("Rename"),
+                    Some(&window_clone),
+                    gtk4::DialogFlags::MODAL,
+                    &[("Cancel", ResponseType::Cancel), ("Rename", ResponseType::Accept)],
+                );
+
+                let content_area = dialog.content_area();
+                let entry = Entry::new();
+                entry.set_text(current_name);
+                entry.set_margin_top(10);
+                entry.set_margin_bottom(10);
+                entry.set_margin_start(10);
+                entry.set_margin_end(10);
+                content_area.append(&entry);
+
+                let file_explorer_clone2 = file_explorer_clone.clone();
+                let selected_path_clone = selected_path.clone();
+                dialog.connect_response(move |dialog, response| {
+                    if response == ResponseType::Accept {
+                        let new_name = entry.text();
+                        if !new_name.is_empty() && new_name.as_str() != current_name {
+                            if let Err(e) = file_explorer_clone2.borrow().rename_file(&selected_path_clone, &new_name) {
+                                eprintln!("Failed to rename: {}", e);
+                            }
+                        }
+                    }
+                    dialog.close();
+                });
+
+                dialog.show();
+            }
+        });
+
+        app.add_action(&action);
     }
 
     window.present();

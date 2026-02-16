@@ -244,10 +244,7 @@ impl FileExplorer {
         }
     }
 
-    pub fn setup_context_menu<F>(&self, on_action: F)
-    where
-        F: Fn(ContextMenuAction, PathBuf) + 'static,
-    {
+    pub fn setup_context_menu(&self, app: &gtk4::Application) {
         let tree_view = self.tree_view.clone();
         let tree_store = self.tree_store.clone();
         
@@ -255,41 +252,33 @@ impl FileExplorer {
         let gesture = GestureClick::new();
         gesture.set_button(3); // Right mouse button
         
-        let on_action = Rc::new(on_action);
-        
         gesture.connect_pressed(move |_gesture, _n_press, x, y| {
             // Get the path at the click position
             if let Some((Some(path), _, _, _)) = tree_view.path_at_pos(x as i32, y as i32) {
+                // Select the item
+                tree_view.selection().select_path(&path);
+                
                 if let Some(iter) = tree_store.iter(&path) {
                     let file_path: String = tree_store.value(&iter, COL_PATH as i32).get().unwrap_or_default();
                     let is_dir: bool = tree_store.value(&iter, COL_IS_DIR as i32).get().unwrap_or(false);
                     
                     if !file_path.is_empty() {
-                        let path_buf = PathBuf::from(file_path);
-                        
                         // Create context menu
                         let menu = gio::Menu::new();
                         
                         if is_dir {
-                            menu.append(Some("New File"), Some("explorer.new-file"));
-                            menu.append(Some("New Folder"), Some("explorer.new-folder"));
-                            menu.append(Some("Delete Folder"), Some("explorer.delete"));
-                            menu.append(Some("Rename"), Some("explorer.rename"));
+                            menu.append(Some("New File"), Some("app.explorer-new-file"));
+                            menu.append(Some("New Folder"), Some("app.explorer-new-folder"));
+                            menu.append(Some("Delete Folder"), Some("app.explorer-delete"));
+                            menu.append(Some("Rename"), Some("app.explorer-rename"));
                         } else {
-                            menu.append(Some("Delete File"), Some("explorer.delete"));
-                            menu.append(Some("Rename"), Some("explorer.rename"));
+                            menu.append(Some("Delete File"), Some("app.explorer-delete"));
+                            menu.append(Some("Rename"), Some("app.explorer-rename"));
                         }
                         
                         let popover = PopoverMenu::from_model(Some(&menu));
                         popover.set_parent(&tree_view);
                         popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                        
-                        // Store the current path for the actions
-                        let current_path = Rc::new(RefCell::new(path_buf.clone()));
-                        
-                        // Connect menu actions would go here
-                        // For now, we'll handle this in the UI module
-                        
                         popover.popup();
                     }
                 }
@@ -347,12 +336,4 @@ impl FileExplorer {
             false
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum ContextMenuAction {
-    NewFile,
-    NewFolder,
-    Delete,
-    Rename,
 }
