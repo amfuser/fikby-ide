@@ -180,7 +180,7 @@ impl FileExplorer {
         }
 
         // Get the directory path
-        let dir_path: String = self.tree_store.value(iter, COL_PATH as i32).get().unwrap();
+        let dir_path: String = self.tree_store.get(iter, COL_PATH as i32);
         
         // Populate with actual contents
         self.populate_tree(&PathBuf::from(dir_path), Some(iter));
