@@ -322,24 +322,11 @@ impl Editor {
             let buffer_clone = editor.main_buffer.clone();
             
             editor.main_buffer.connect_changed(move |_| {
-                let s = buffer_clone.start_iter();
-                let e = buffer_clone.end_iter();
-                let content = buffer_clone.text(&s, &e, false);
-
-                let line_count = if content.is_empty() {
-                    1
-                } else {
-                    let text_str = content.as_str();
-                    let newline_count = text_str.chars().filter(|&c| c == '\n').count();
-                    if text_str.ends_with('\n') {
-                        newline_count
-                    } else {
-                        newline_count + 1
-                    }
-                };
+                // Use GTK's built-in line_count which properly handles all edge cases
+                let line_count = buffer_clone.line_count();
                 
                 let width = line_count.to_string().len();
-                let mut numbers = String::with_capacity(line_count * (width + 2));
+                let mut numbers = String::with_capacity(line_count as usize * (width + 2));
                 
                 for i in 1..=line_count {
                     if i > 1 {
@@ -597,24 +584,11 @@ impl Editor {
     }
 
     pub fn update(&self, status_label: &Label, status_info_label: &Label) {
-        let s = self.main_buffer.start_iter();
-        let e = self.main_buffer.end_iter();
-        let content = self.main_buffer.text(&s, &e, false);
-
-        let line_count = if content.is_empty() {
-            1
-        } else {
-            let text_str = content.as_str();
-            let newline_count = text_str.chars().filter(|&c| c == '\n').count();
-            if text_str.ends_with('\n') {
-                newline_count
-            } else {
-                newline_count + 1
-            }
-        };
+        // Use GTK's built-in line_count which properly handles all edge cases
+        let line_count = self.main_buffer.line_count();
         
         let width = line_count.to_string().len();
-        let mut numbers = String::with_capacity(line_count * (width + 2));
+        let mut numbers = String::with_capacity(line_count as usize * (width + 2));
         
         for i in 1..=line_count {
             if i > 1 {
