@@ -24,6 +24,10 @@ impl ThemeMode {
 
 // Light theme CSS
 const LIGHT_CSS: &str = r#"
+window {
+    background: #ffffff;
+    color: #000000;
+}
 .menubar {
     background: #f5f5f5;
     padding: 4px 10px;
@@ -45,13 +49,16 @@ const LIGHT_CSS: &str = r#"
     color: #444;
     padding-left: 6px;
     padding-right: 6px;
+    padding-top: 0px;
+    padding-bottom: 0px;
     font-family: monospace;
     font-size: 10pt;
-    line-height: .994;
+    line-height: 1.2;
 }
 .editor-view {
     font-family: monospace;
     font-size: 10pt;
+    line-height: 1.2;
     background: #ffffff;
     color: #000000;
 }
@@ -61,10 +68,35 @@ const LIGHT_CSS: &str = r#"
     color: #333;
     font-family: monospace;
 }
+notebook {
+    background: #ffffff;
+}
+notebook > header {
+    background: #f0f0f0;
+}
+notebook > header > tabs > tab {
+    background: #e8e8e8;
+    color: #333;
+}
+notebook > header > tabs > tab:checked {
+    background: #ffffff;
+    color: #000000;
+}
+paned > separator {
+    background: #cccccc;
+}
+popover {
+    background: #ffffff;
+    color: #000000;
+}
 "#;
 
 // Dark theme CSS
 const DARK_CSS: &str = r#"
+window {
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
 .menubar {
     background: #2b2b2b;
     padding: 4px 10px;
@@ -88,13 +120,16 @@ const DARK_CSS: &str = r#"
     color: #a0a0a0;
     padding-left: 6px;
     padding-right: 6px;
+    padding-top: 0px;
+    padding-bottom: 0px;
     font-family: monospace;
     font-size: 10pt;
-    line-height: .994;
+    line-height: 1.2;
 }
 .editor-view {
     font-family: monospace;
     font-size: 10pt;
+    line-height: 1.2;
     background: #1e1e1e;
     color: #d4d4d4;
 }
@@ -103,6 +138,27 @@ const DARK_CSS: &str = r#"
     background: #2b2b2b;
     color: #e0e0e0;
     font-family: monospace;
+}
+notebook {
+    background: #1e1e1e;
+}
+notebook > header {
+    background: #252526;
+}
+notebook > header > tabs > tab {
+    background: #2b2b2b;
+    color: #cccccc;
+}
+notebook > header > tabs > tab:checked {
+    background: #1e1e1e;
+    color: #ffffff;
+}
+paned > separator {
+    background: #3e3e3e;
+}
+popover {
+    background: #2b2b2b;
+    color: #cccccc;
 }
 "#;
 

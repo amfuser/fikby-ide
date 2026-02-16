@@ -108,26 +108,6 @@ pub fn build_ui(app: &Application) {
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
 
-    // TOGGLE THEME ACTION
-    {
-        let action = SimpleAction::new("toggle-theme", None);
-        let theme_mode_clone = current_theme_mode.clone();
-
-        action.connect_activate(move |_, _| {
-            let mut mode = theme_mode_clone.borrow_mut();
-            *mode = if *mode == ThemeMode::Light {
-                ThemeMode::Dark
-            } else {
-                ThemeMode::Light
-            };
-            
-            // Apply new theme
-            crate::load_css(*mode);
-        });
-
-        app.add_action(&action);
-    }
-
     // NEW FILE ACTION
     {
         let action = SimpleAction::new("new", None);
