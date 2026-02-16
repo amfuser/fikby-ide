@@ -621,7 +621,8 @@ pub fn build_ui(app: &Application) {
         file_explorer_rc.borrow().connect_row_expanded(move |tree_store, iter, _path| {
             // Check if this is the first expansion (has dummy child)
             if let Some(child_iter) = tree_store.iter_children(Some(iter)) {
-                let child_path: String = tree_store.value(&child_iter, 1).get().unwrap_or_default();
+                // GTK4 API: TreeModelExt::get() returns the typed value directly
+                let child_path: String = tree_store.get(&child_iter, 1);
                 if child_path.is_empty() {
                     // This is a dummy child, expand the directory
                     file_explorer_clone2.borrow().expand_directory(iter);
