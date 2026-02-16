@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, Label, Entry, Dialog, ResponseType,
-    MenuButton, Notebook, Orientation, Paned, PolicyType, PopoverMenu, ScrolledWindow,
+    MenuButton, Notebook, Orientation, Paned, PopoverMenu,
     MessageDialog, MessageType, ButtonsType,
 };
 use gtk4::gio::SimpleAction;

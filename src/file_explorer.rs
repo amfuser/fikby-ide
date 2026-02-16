@@ -1,12 +1,10 @@
 use gtk4::prelude::*;
 use gtk4::{
-    gio, glib, Box as GtkBox, CellRendererText, Label, Menu, MenuItem, Orientation,
-    PopoverMenu, ScrolledWindow, TreeIter, TreePath, TreeStore, TreeView, TreeViewColumn,
-    GestureClick, EventControllerKey,
+    gio, glib, CellRendererText, PopoverMenu, ScrolledWindow, TreeIter, TreePath, TreeStore, 
+    TreeView, TreeViewColumn, GestureClick,
 };
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::cell::RefCell;
 
 pub struct FileExplorer {
     pub widget: ScrolledWindow,
@@ -154,8 +152,8 @@ impl FileExplorer {
         self.tree_view.connect_row_activated(move |tree_view, path, _column| {
             if let Some(model) = tree_view.model() {
                 if let Some(iter) = model.iter(path) {
-                    let file_path: String = model.value(&iter, COL_PATH as i32).get().unwrap();
-                    let is_dir: bool = model.value(&iter, COL_IS_DIR as i32).get().unwrap();
+                    let file_path: String = model.get(&iter, COL_PATH as i32);
+                    let is_dir: bool = model.get(&iter, COL_IS_DIR as i32);
                     
                     if !file_path.is_empty() {
                         callback(PathBuf::from(file_path), is_dir);
@@ -322,7 +320,7 @@ impl FileExplorer {
 
     pub fn get_selected_path(&self) -> Option<PathBuf> {
         if let Some((model, iter)) = self.tree_view.selection().selected() {
-            let path: String = model.value(&iter, COL_PATH as i32).get().ok()?;
+            let path: String = model.get(&iter, COL_PATH as i32);
             Some(PathBuf::from(path))
         } else {
             None
@@ -331,7 +329,7 @@ impl FileExplorer {
 
     pub fn get_selected_is_dir(&self) -> bool {
         if let Some((model, iter)) = self.tree_view.selection().selected() {
-            model.value(&iter, COL_IS_DIR as i32).get().unwrap_or(false)
+            model.get(&iter, COL_IS_DIR as i32)
         } else {
             false
         }
