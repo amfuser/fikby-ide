@@ -6,6 +6,7 @@ mod find_replace;
 
 use gtk4::prelude::*;
 use gtk4::{gdk, Application, CssProvider};
+use config::ThemeMode;
 
 fn main() {
     let app = Application::builder()
@@ -13,8 +14,8 @@ fn main() {
         .build();
 
     app.connect_startup(|_| {
-        // Load CSS on startup
-        load_css();
+        // Load default CSS on startup (dark theme by default)
+        load_css(ThemeMode::Dark);
     });
 
     app.connect_activate(|app| {
@@ -24,9 +25,9 @@ fn main() {
     app.run();
 }
 
-fn load_css() {
+pub fn load_css(theme: ThemeMode) {
     let provider = CssProvider::new();
-    provider.load_from_data(config::CSS);
+    provider.load_from_data(theme.css());
     
     // Add the provider to the default screen
     gtk4::style_context_add_provider_for_display(
