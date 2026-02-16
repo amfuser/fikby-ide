@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{Align, Box as GtkBox, Image, Label, ScrolledWindow, TextBuffer, TextView, WrapMode, PolicyType, Button};
-use gtk4::{gdk, EventControllerKey, Inhibit};
+use gtk4::{gdk, EventControllerKey, Inhibit, DrawingArea, Overlay};
 use gtk4::TextTag;
 use glib::clone;
 use std::cell::RefCell;
@@ -28,13 +28,12 @@ pub enum FileState {
     Saved(PathBuf),
 }
 
-/// Editor encapsulates a text editor view, gutter view, buffers and tag cache.
+/// Editor encapsulates a text editor view, line number drawing area, buffers and tag cache.
 #[allow(dead_code)]
 pub struct Editor {
     pub main_view: TextView,
     pub main_buffer: TextBuffer,
-    pub gutter_view: TextView,
-    pub gutter_buffer: TextBuffer,
+    pub line_numbers: DrawingArea,
     pub content_row: GtkBox,
     pub header: GtkBox,
     pub tab_label: Label,
@@ -65,7 +64,7 @@ impl Editor {
         main_view.set_pixels_inside_wrap(0);
         main_view.set_top_margin(0);
         main_view.set_bottom_margin(0);
-        main_view.set_left_margin(4);
+        main_view.set_left_margin(60);  // Leave space for line numbers
         main_view.set_right_margin(4);
         
         let main_buffer = main_view.buffer();
@@ -73,27 +72,12 @@ impl Editor {
         // Enable undo/redo
         main_buffer.set_enable_undo(true);
 
-        // Gutter TextView for line numbers (using TextView instead of Label for perfect alignment)
-        let gutter_view = TextView::new();
-        gutter_view.set_editable(false);
-        gutter_view.set_cursor_visible(false);
-        gutter_view.set_can_focus(false);
-        gutter_view.set_monospace(true);
-        gutter_view.style_context().add_class("gutter");
-        gutter_view.set_halign(Align::End);
-        gutter_view.set_valign(Align::Start);
-        gutter_view.set_justification(gtk4::Justification::Right);  // Right-align the line numbers
-        
-        // Match all spacing settings from main_view for perfect alignment
-        gutter_view.set_pixels_above_lines(0);
-        gutter_view.set_pixels_below_lines(0);
-        gutter_view.set_pixels_inside_wrap(0);
-        gutter_view.set_top_margin(0);
-        gutter_view.set_bottom_margin(0);
-        gutter_view.set_left_margin(4);  // Match main_view
-        gutter_view.set_right_margin(4); // Match main_view
-        
-        let gutter_buffer = gutter_view.buffer();
+        // Create DrawingArea for line numbers - this is the robust approach
+        let line_numbers = DrawingArea::new();
+        line_numbers.set_width_request(55);  // Fixed width for line numbers
+        line_numbers.set_vexpand(true);
+        line_numbers.set_valign(Align::Fill);
+        line_numbers.style_context().add_class("gutter");
 
         let main_scrolled = ScrolledWindow::builder()
             .child(&main_view)
@@ -102,20 +86,17 @@ impl Editor {
             .vscrollbar_policy(PolicyType::Automatic)
             .build();
 
-        let gutter_scrolled = ScrolledWindow::builder()
-            .child(&gutter_view)
-            // No min_content_height - gutter follows main view's size via shared adjustment
-            .hscrollbar_policy(PolicyType::Never)
-            .vscrollbar_policy(PolicyType::Never)  // Gutter should never scroll on its own
-            .min_content_width(80)  // Increased from 60 to prevent number truncation
-            .build();
-
-        let vadj: gtk4::Adjustment = main_scrolled.vadjustment();
-        gutter_scrolled.set_vadjustment(Some(&vadj));
+        // Use Overlay to position line numbers over the editor's left margin
+        let overlay = Overlay::new();
+        overlay.set_child(Some(&main_scrolled));
+        overlay.add_overlay(&line_numbers);
+        
+        // Align line numbers to the left
+        line_numbers.set_halign(Align::Start);
+        line_numbers.set_valign(Align::Fill);
 
         let content_row = GtkBox::new(gtk4::Orientation::Horizontal, 0);
-        content_row.append(&gutter_scrolled);
-        content_row.append(&main_scrolled);
+        content_row.append(&overlay);
         content_row.set_hexpand(true);
         content_row.set_vexpand(true);
 
@@ -183,10 +164,9 @@ impl Editor {
         let (tx, rx) = glib::MainContext::channel::<(u64, String)>(glib::Priority::default());
 
         let editor = Rc::new(Self {
-            main_view,
-            main_buffer,
-            gutter_view,
-            gutter_buffer,
+            main_view: main_view.clone(),
+            main_buffer: main_buffer.clone(),
+            line_numbers: line_numbers.clone(),
             content_row,
             header,
             tab_label: tab_label.clone(),
@@ -317,11 +297,93 @@ impl Editor {
         }
 
         // Mark dirty
+        // Setup draw function for line numbers DrawingArea
         {
-            let dirty_clone = editor.dirty.clone();
-            let tab_label_clone = editor.tab_label.clone();
-            let current_file_clone = editor.current_file.clone();
-            editor.main_buffer.connect_changed(move |_| {
+            let buffer_clone = main_buffer.clone();
+            let view_clone = main_view.clone();
+            
+            line_numbers.set_draw_func(clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, _height| {
+                // Get the vertical adjustment to know scroll position
+                let line_count = buffer_clone.line_count();
+                
+                // Get font metrics
+                let pango_context = view_clone.pango_context();
+                let font_desc = pango_context.font_description().unwrap();
+                
+                // Get the visible area
+                let visible_rect = view_clone.visible_rect();
+                let (first_y, _) = view_clone.buffer_to_window_coords(
+                    gtk4::TextWindowType::Widget,
+                    0,
+                    visible_rect.y()
+                );
+                
+                // Calculate which lines are visible
+                let first_visible = view_clone.iter_at_location(0, first_y as i32);
+                let first_line = if let Some(iter) = first_visible {
+                    iter.line()
+                } else {
+                    0
+                };
+                
+                // Draw line numbers for visible lines
+                let layout = gtk4::pango::Layout::new(&pango_context);
+                layout.set_font_description(Some(&font_desc));
+                layout.set_alignment(gtk4::pango::Alignment::Right);
+                layout.set_width((width - 10) * gtk4::pango::SCALE);  // Leave some padding
+                
+                // Get theme colors from CSS
+                let style_context = view_clone.style_context();
+                let fg_color = style_context.color();
+                
+                cr.set_source_rgba(fg_color.red() as f64, fg_color.green() as f64, fg_color.blue() as f64, fg_color.alpha() as f64);
+                
+                let mut y = 0.0;
+                for line_num in first_line..line_count.min(first_line + 100) {  // Limit to 100 visible lines
+                    // Get the Y position of this line
+                    let iter = buffer_clone.iter_at_line(line_num).unwrap_or_else(|| buffer_clone.start_iter());
+                    let location = view_clone.iter_location(&iter);
+                    let (_, window_y) = view_clone.buffer_to_window_coords(
+                        gtk4::TextWindowType::Widget,
+                        location.x(),
+                        location.y()
+                    );
+                    
+                    y = window_y as f64 - first_y as f64;
+                    
+                    // Draw the line number
+                    layout.set_text(&(line_num + 1).to_string());
+                    cr.move_to(5.0, y);
+                    gtk4::pangocairo::functions::show_layout(cr, &layout);
+                }
+            }));
+        }
+
+        // Update line numbers when buffer changes
+        {
+            let line_numbers_clone = line_numbers.clone();
+            
+            main_buffer.connect_changed(move |_| {
+                line_numbers_clone.queue_draw();
+            });
+        }
+
+        // Update line numbers when scrolling
+        {
+            let line_numbers_clone = line_numbers.clone();
+            let vadj = main_scrolled.vadjustment();
+            
+            vadj.connect_value_changed(move |_| {
+                line_numbers_clone.queue_draw();
+            });
+        }
+
+        // Mark dirty on change
+        {
+            let dirty_clone = dirty.clone();
+            let tab_label_clone = tab_label.clone();
+            let current_file_clone = current_file.clone();
+            main_buffer.connect_changed(move |_| {
                 *dirty_clone.borrow_mut() = true;
                 let base = current_file_clone
                     .borrow()
@@ -330,15 +392,6 @@ impl Editor {
                     .unwrap_or("Untitled")
                     .to_string();
                 tab_label_clone.set_text(&format!("*{}", base));
-            });
-        }
-
-        // Update gutter
-        {
-            let editor_clone = editor.clone();
-            
-            editor.main_buffer.connect_changed(move |_| {
-                editor_clone.update_line_numbers();
             });
         }
 
@@ -356,10 +409,8 @@ impl Editor {
             });
         }
 
-        // Initialize line numbers for the initial content
-        // This is critical because the connect_changed handler above only fires on
-        // FUTURE changes, not the initial text that was set before the handler was connected
-        editor.update_line_numbers();
+        // Initial draw of line numbers
+        editor.line_numbers.queue_draw();
 
         editor
     }
@@ -498,22 +549,6 @@ impl Editor {
     }
 
     /// Update the line numbers in the gutter
-    fn update_line_numbers(&self) {
-        let line_count = self.main_buffer.line_count();
-        
-        // Build line numbers string - no need for right-padding since TextView handles justification
-        let mut numbers = String::with_capacity(line_count as usize * 6);
-        
-        for i in 1..=line_count {
-            if i > 1 {
-                numbers.push('\n');
-            }
-            numbers.push_str(&i.to_string());
-        }
-        
-        self.gutter_buffer.set_text(&numbers);
-    }
-
     /// Update the status bar with current cursor position and file info
     fn update_status_bar(&self, status_label: &Label, status_info_label: &Label, content: &str) {
         let ins = self.main_buffer.get_insert();
@@ -662,8 +697,8 @@ impl Editor {
 
     /// Update the editor display: line numbers, status bar, and syntax highlighting
     pub fn update(&self, status_label: &Label, status_info_label: &Label) {
-        // Update line numbers
-        self.update_line_numbers();
+        // Redraw line numbers
+        self.line_numbers.queue_draw();
 
         // Get buffer content for status display and syntax highlighting
         let s = self.main_buffer.start_iter();
