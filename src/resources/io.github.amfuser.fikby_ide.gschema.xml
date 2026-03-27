@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.amfuser.fikby_ide" path="/io/github/amfuser/fikby_ide/">
+    <key name="indent-style" type="s">
+      <default>'spaces'</default>
+      <summary>Indent style</summary>
+      <description>Whether the editor indents using spaces or tabs.</description>
+    </key>
+
+    <key name="indent-width" type="i">
+      <default>4</default>
+      <summary>Indent width</summary>
+      <description>Number of spaces per indentation level when using spaces.</description>
+    </key>
+  </schema>
+</schemalist>

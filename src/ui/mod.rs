@@ -1,8 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Label, Entry, Dialog, ResponseType,
-    MenuButton, Notebook, Orientation, Paned, PopoverMenu,
-    MessageDialog, MessageType, ButtonsType,
+    Application, ApplicationWindow, Box as GtkBox, Button, ComboBoxText, Dialog, Entry, Grid,
+    Label, MessageDialog, MessageType, Notebook, Orientation, Paned, Popover, PopoverMenu,
+    ResponseType, SpinButton,
 };
 use gtk4::gio::SimpleAction;
 use std::cell::RefCell;
@@ -15,15 +15,19 @@ use crate::config::ThemeMode;
 use crate::editor::Editor;
 use crate::file_explorer::FileExplorer;
 use crate::find_replace::FindReplaceDialog;
+use crate::settings::{EditorSettings, IndentStyle};
 
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
     let ts = ThemeSet::load_defaults();
-    
+
     // Start with dark theme by default
     let current_theme_mode = Rc::new(RefCell::new(ThemeMode::Dark));
     let theme = Rc::new(ts.themes["base16-ocean.dark"].clone());
     let current_theme: Rc<RefCell<Rc<Theme>>> = Rc::new(RefCell::new(theme.clone()));
+
+    // Global editor settings (persisted via GSettings)
+    let editor_settings = Rc::new(EditorSettings::new());
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -40,8 +44,6 @@ pub fn build_ui(app: &Application) {
 
     let file_menu = create_file_menu();
     let edit_menu = create_edit_menu();
-    
-    // Pass the theme mode to view menu for theme toggle
     let view_menu = create_view_menu();
 
     menubar.append(&file_menu);
@@ -59,8 +61,73 @@ pub fn build_ui(app: &Application) {
     right_box.append(&settings_btn);
 
     menubar.append(&right_box);
-
     vbox.append(&menubar);
+
+    // Settings popover UI
+    {
+        let popover = Popover::new();
+        popover.set_has_arrow(true);
+        popover.set_autohide(true);
+        popover.set_parent(&settings_btn);
+
+        let grid = Grid::new();
+        grid.set_margin_top(10);
+        grid.set_margin_bottom(10);
+        grid.set_margin_start(10);
+        grid.set_margin_end(10);
+        grid.set_row_spacing(8);
+        grid.set_column_spacing(10);
+
+        let style_label = Label::new(Some("Indent using:"));
+        style_label.set_halign(gtk4::Align::Start);
+
+        let style_combo = ComboBoxText::new();
+        style_combo.append(Some("spaces"), "Spaces");
+        style_combo.append(Some("tabs"), "Tabs");
+
+        // IMPORTANT: set_active_id returns bool; ensure this is a statement.
+        match editor_settings.indent_style() {
+            IndentStyle::Spaces => {
+                style_combo.set_active_id(Some("spaces"));
+            }
+            IndentStyle::Tabs => {
+                style_combo.set_active_id(Some("tabs"));
+            }
+        }
+
+        let width_label = Label::new(Some("Indent width:"));
+        width_label.set_halign(gtk4::Align::Start);
+
+        // SpinButton (1..8)
+        let width_spin = SpinButton::with_range(1.0, 8.0, 1.0);
+        width_spin.set_numeric(true);
+        width_spin.set_value(editor_settings.indent_width() as f64);
+
+        grid.attach(&style_label, 0, 0, 1, 1);
+        grid.attach(&style_combo, 1, 0, 1, 1);
+        grid.attach(&width_label, 0, 1, 1, 1);
+        grid.attach(&width_spin, 1, 1, 1, 1);
+
+        popover.set_child(Some(&grid));
+
+        let settings_for_style = editor_settings.clone();
+        style_combo.connect_changed(move |combo| {
+            let style = match combo.active_id().as_deref() {
+                Some("tabs") => IndentStyle::Tabs,
+                _ => IndentStyle::Spaces,
+            };
+            settings_for_style.set_indent_style(style);
+        });
+
+        let settings_for_width = editor_settings.clone();
+        width_spin.connect_value_changed(move |spin| {
+            settings_for_width.set_indent_width(spin.value() as i32);
+        });
+
+        settings_btn.connect_clicked(move |_| {
+            popover.popup();
+        });
+    }
 
     // Main paned (sidebar + editor area)
     let paned = Paned::new(Orientation::Horizontal);
@@ -68,7 +135,7 @@ pub fn build_ui(app: &Application) {
 
     // Create file explorer
     let file_explorer_rc = FileExplorer::new();
-    
+
     // Set current directory as root (or fallback to home)
     let root_dir = std::env::current_dir().unwrap_or_else(|_| {
         std::env::var("HOME")
@@ -76,9 +143,9 @@ pub fn build_ui(app: &Application) {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("/"))
     });
-    
+
     file_explorer_rc.borrow_mut().set_root_directory(root_dir);
-    
+
     // Setup context menu (will be connected to actions later)
     file_explorer_rc.borrow().setup_context_menu(app);
 
@@ -91,8 +158,6 @@ pub fn build_ui(app: &Application) {
     notebook.set_scrollable(true);
     notebook.set_vexpand(true);
     notebook.set_hexpand(true);
-    // Set minimum height to prevent negative tab height calculations during window resize
-    // This prevents GTK warning about negative min-height and window minimize issues
     notebook.set_size_request(-1, 100);
 
     // Status bar
@@ -127,20 +192,24 @@ pub fn build_ui(app: &Application) {
         let current_theme_clone = current_theme.clone();
         let status_label_clone = status_label.clone();
         let status_info_label_clone = status_info_label.clone();
+        let settings_clone = editor_settings.clone();
 
         action.connect_activate(move |_, _| {
             let theme_clone = current_theme_clone.borrow().clone();
-            let editor = Editor::new("Untitled", None, None, ss_clone.clone(), theme_clone);
-            
-            let page_index = notebook_clone.append_page(
-                &editor.content_row(),
-                Some(&editor.header),
+            let editor = Editor::new(
+                "Untitled",
+                None,
+                None,
+                ss_clone.clone(),
+                theme_clone,
+                settings_clone.clone(),
             );
-            
+
+            let page_index = notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
             notebook_clone.set_current_page(Some(page_index));
-            
+
             editor.update(&status_label_clone, &status_info_label_clone);
-            
+
             editors_clone.borrow_mut().push(editor.clone());
             *current_editor_clone.borrow_mut() = Some(editor.clone());
 
@@ -151,7 +220,9 @@ pub fn build_ui(app: &Application) {
             editor.close_button.connect_clicked(move |_| {
                 if let Some(page_num) = notebook_clone2.page_num(&editor_clone.content_row()) {
                     notebook_clone2.remove_page(Some(page_num));
-                    editors_clone2.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                    editors_clone2
+                        .borrow_mut()
+                        .retain(|e| !Rc::ptr_eq(e, &editor_clone));
                 }
             });
         });
@@ -170,13 +241,17 @@ pub fn build_ui(app: &Application) {
         let current_theme_clone = current_theme.clone();
         let status_label_clone = status_label.clone();
         let status_info_label_clone = status_info_label.clone();
+        let settings_clone = editor_settings.clone();
 
         action.connect_activate(move |_, _| {
             let dialog = gtk4::FileChooserDialog::new(
                 Some("Open File"),
                 Some(&window_clone),
                 gtk4::FileChooserAction::Open,
-                &[("Cancel", gtk4::ResponseType::Cancel), ("Open", gtk4::ResponseType::Accept)],
+                &[
+                    ("Cancel", gtk4::ResponseType::Cancel),
+                    ("Open", gtk4::ResponseType::Accept),
+                ],
             );
 
             let notebook_clone2 = notebook_clone.clone();
@@ -186,6 +261,7 @@ pub fn build_ui(app: &Application) {
             let current_theme_clone2 = current_theme_clone.clone();
             let status_label_clone2 = status_label_clone.clone();
             let status_info_label_clone2 = status_info_label_clone.clone();
+            let settings_clone2 = settings_clone.clone();
 
             dialog.connect_response(move |dialog, response| {
                 if response == gtk4::ResponseType::Accept {
@@ -199,16 +275,15 @@ pub fn build_ui(app: &Application) {
                                     Some(path.clone()),
                                     ss_clone2.clone(),
                                     theme_clone,
+                                    settings_clone2.clone(),
                                 );
 
-                                let page_index = notebook_clone2.append_page(
-                                    &editor.content_row(),
-                                    Some(&editor.header),
-                                );
+                                let page_index = notebook_clone2
+                                    .append_page(&editor.content_row(), Some(&editor.header));
 
                                 notebook_clone2.set_current_page(Some(page_index));
                                 editor.update(&status_label_clone2, &status_info_label_clone2);
-                                
+
                                 editors_clone2.borrow_mut().push(editor.clone());
                                 *current_editor_clone2.borrow_mut() = Some(editor.clone());
 
@@ -217,9 +292,13 @@ pub fn build_ui(app: &Application) {
                                 let editors_clone3 = editors_clone2.clone();
                                 let editor_clone = editor.clone();
                                 editor.close_button.connect_clicked(move |_| {
-                                    if let Some(page_num) = notebook_clone3.page_num(&editor_clone.content_row()) {
+                                    if let Some(page_num) =
+                                        notebook_clone3.page_num(&editor_clone.content_row())
+                                    {
                                         notebook_clone3.remove_page(Some(page_num));
-                                        editors_clone3.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                                        editors_clone3
+                                            .borrow_mut()
+                                            .retain(|e| !Rc::ptr_eq(e, &editor_clone));
                                     }
                                 });
                             }
@@ -246,15 +325,16 @@ pub fn build_ui(app: &Application) {
                 let current_file = editor.current_file.borrow().clone();
 
                 if let Some(path) = current_file {
-                    // Save to existing file
                     let _ = editor.save_to_path(&path);
                 } else {
-                    // Show save dialog
                     let dialog = gtk4::FileChooserDialog::new(
                         Some("Save File"),
                         Some(&window_clone),
                         gtk4::FileChooserAction::Save,
-                        &[("Cancel", gtk4::ResponseType::Cancel), ("Save", gtk4::ResponseType::Accept)],
+                        &[
+                            ("Cancel", gtk4::ResponseType::Cancel),
+                            ("Save", gtk4::ResponseType::Accept),
+                        ],
                     );
 
                     let editor_clone = editor.clone();
@@ -289,7 +369,10 @@ pub fn build_ui(app: &Application) {
                     Some("Save File As"),
                     Some(&window_clone),
                     gtk4::FileChooserAction::Save,
-                    &[("Cancel", gtk4::ResponseType::Cancel), ("Save", gtk4::ResponseType::Accept)],
+                    &[
+                        ("Cancel", gtk4::ResponseType::Cancel),
+                        ("Save", gtk4::ResponseType::Accept),
+                    ],
                 );
 
                 let editor_clone = editor.clone();
@@ -316,10 +399,7 @@ pub fn build_ui(app: &Application) {
         let action = SimpleAction::new("quit", None);
         let window_clone = window.clone();
 
-        action.connect_activate(move |_, _| {
-            window_clone.close();
-        });
-
+        action.connect_activate(move |_, _| window_clone.close());
         app.add_action(&action);
     }
 
@@ -404,18 +484,16 @@ pub fn build_ui(app: &Application) {
 
         action.connect_activate(move |_, _| {
             if let Some(editor) = current_editor_clone.borrow().as_ref() {
-                // Upcast ApplicationWindow to Window
                 let window_ref: &gtk4::Window = window_clone.upcast_ref();
                 let find_dialog = FindReplaceDialog::new(window_ref, editor.clone());
-                
-                // If there's selected text, use it as the initial find text
+
                 if let Some((start, end)) = editor.main_buffer.selection_bounds() {
                     let selected = editor.main_buffer.text(&start, &end, false);
                     if !selected.is_empty() && !selected.contains('\n') {
                         find_dialog.set_find_text(&selected);
                     }
                 }
-                
+
                 find_dialog.show();
             }
         });
@@ -423,7 +501,7 @@ pub fn build_ui(app: &Application) {
         app.add_action(&action);
     }
 
-    // REPLACE ACTION (same as find, but with replace tab focused)
+    // REPLACE ACTION
     {
         let action = SimpleAction::new("replace", None);
         let current_editor_clone = current_editor.clone();
@@ -431,18 +509,16 @@ pub fn build_ui(app: &Application) {
 
         action.connect_activate(move |_, _| {
             if let Some(editor) = current_editor_clone.borrow().as_ref() {
-                // Upcast ApplicationWindow to Window
                 let window_ref: &gtk4::Window = window_clone.upcast_ref();
                 let find_dialog = FindReplaceDialog::new(window_ref, editor.clone());
-                
-                // If there's selected text, use it as the initial find text
+
                 if let Some((start, end)) = editor.main_buffer.selection_bounds() {
                     let selected = editor.main_buffer.text(&start, &end, false);
                     if !selected.is_empty() && !selected.contains('\n') {
                         find_dialog.set_find_text(&selected);
                     }
                 }
-                
+
                 find_dialog.show();
             }
         });
@@ -464,7 +540,7 @@ pub fn build_ui(app: &Application) {
         app.add_action(&action);
     }
 
-    // TOGGLE THEME ACTION
+    // TOGGLE THEME ACTION (updates UI CSS + syntect highlighting theme)
     {
         let action = SimpleAction::new("toggle-theme", None);
         let current_theme_mode_clone = current_theme_mode.clone();
@@ -472,7 +548,6 @@ pub fn build_ui(app: &Application) {
         let editors_clone = editors.clone();
 
         action.connect_activate(move |_, _| {
-            // Toggle theme mode
             let new_mode = {
                 let mut mode = current_theme_mode_clone.borrow_mut();
                 *mode = match *mode {
@@ -482,22 +557,20 @@ pub fn build_ui(app: &Application) {
                 *mode
             };
 
-            // Update CSS
+            // Apply UI theme (embedded CSS)
             crate::load_css(new_mode);
 
-            // Load new syntax highlighting theme
+            // Update syntax highlighting theme
             let ts = ThemeSet::load_defaults();
             let theme_name = new_mode.syntax_theme_name();
             let new_theme = if let Some(theme) = ts.themes.get(theme_name) {
                 Rc::new(theme.clone())
             } else {
-                // Fallback to first available theme if the named theme doesn't exist
                 eprintln!("Warning: Theme '{}' not found, using fallback", theme_name);
                 Rc::new(ts.themes.values().next().unwrap().clone())
             };
             *current_theme_clone.borrow_mut() = new_theme.clone();
 
-            // Update all open editors with the new theme
             for editor in editors_clone.borrow().iter() {
                 editor.set_theme(new_theme.clone());
             }
@@ -525,7 +598,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // Set up keyboard shortcuts
+    // Shortcuts
     app.set_accels_for_action("app.new", &["<Ctrl>N"]);
     app.set_accels_for_action("app.open", &["<Ctrl>O"]);
     app.set_accels_for_action("app.save", &["<Ctrl>S"]);
@@ -541,10 +614,17 @@ pub fn build_ui(app: &Application) {
     app.set_accels_for_action("app.toggle-theme", &["<Ctrl>T"]);
 
     // Create initial empty tab
-    let initial_editor = Editor::new("Untitled", None, None, ss.clone(), theme.clone());
+    let initial_editor = Editor::new(
+        "Untitled",
+        None,
+        None,
+        ss.clone(),
+        theme.clone(),
+        editor_settings.clone(),
+    );
     notebook.append_page(&initial_editor.content_row(), Some(&initial_editor.header));
     initial_editor.update(&status_label, &status_info_label);
-    
+
     editors.borrow_mut().push(initial_editor.clone());
     *current_editor.borrow_mut() = Some(initial_editor.clone());
 
@@ -556,14 +636,15 @@ pub fn build_ui(app: &Application) {
         initial_editor.close_button.connect_clicked(move |_| {
             if let Some(page_num) = notebook_clone.page_num(&editor_clone.content_row()) {
                 notebook_clone.remove_page(Some(page_num));
-                editors_clone.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                editors_clone
+                    .borrow_mut()
+                    .retain(|e| !Rc::ptr_eq(e, &editor_clone));
             }
         });
     }
 
     // Connect file explorer actions
     {
-        // File activation (double-click or Enter)
         let file_explorer_clone = file_explorer_rc.clone();
         let notebook_clone = notebook.clone();
         let editors_clone = editors.clone();
@@ -572,10 +653,10 @@ pub fn build_ui(app: &Application) {
         let current_theme_clone = current_theme.clone();
         let status_label_clone = status_label.clone();
         let status_info_label_clone = status_info_label.clone();
+        let settings_clone = editor_settings.clone();
 
         file_explorer_rc.borrow().connect_row_activated(move |path_buf, is_dir| {
             if !is_dir {
-                // Open the file
                 if let Ok(content) = std::fs::read_to_string(&path_buf) {
                     let theme_clone = current_theme_clone.borrow().clone();
                     let editor = Editor::new(
@@ -584,30 +665,30 @@ pub fn build_ui(app: &Application) {
                         Some(path_buf.clone()),
                         ss_clone.clone(),
                         theme_clone,
+                        settings_clone.clone(),
                     );
 
-                    let page_index = notebook_clone.append_page(
-                        &editor.content_row(),
-                        Some(&editor.header),
-                    );
-
+                    let page_index =
+                        notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
                     notebook_clone.set_current_page(Some(page_index));
                     editor.update(&status_label_clone, &status_info_label_clone);
-                    
+
                     editors_clone.borrow_mut().push(editor.clone());
                     *current_editor_clone.borrow_mut() = Some(editor.clone());
 
-                    // Highlight the file in the explorer
                     file_explorer_clone.borrow().highlight_file(&path_buf);
 
-                    // Connect close button
                     let notebook_clone2 = notebook_clone.clone();
                     let editors_clone2 = editors_clone.clone();
                     let editor_clone = editor.clone();
                     editor.close_button.connect_clicked(move |_| {
-                        if let Some(page_num) = notebook_clone2.page_num(&editor_clone.content_row()) {
+                        if let Some(page_num) =
+                            notebook_clone2.page_num(&editor_clone.content_row())
+                        {
                             notebook_clone2.remove_page(Some(page_num));
-                            editors_clone2.borrow_mut().retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                            editors_clone2
+                                .borrow_mut()
+                                .retain(|e| !Rc::ptr_eq(e, &editor_clone));
                         }
                     });
                 }
@@ -616,24 +697,21 @@ pub fn build_ui(app: &Application) {
 
         // Directory expansion
         let file_explorer_clone2 = file_explorer_rc.clone();
-        file_explorer_rc.borrow().connect_row_expanded(move |tree_store, iter, _path| {
-            // Check if this is the first expansion (has dummy child)
-            if let Some(child_iter) = tree_store.iter_children(Some(iter)) {
-                // GTK4 API: TreeModelExt::get() returns the typed value directly
-                let child_path: String = tree_store.get(&child_iter, 1);
-                if child_path.is_empty() {
-                    // This is a dummy child, expand the directory
-                    file_explorer_clone2.borrow().expand_directory(iter);
+        file_explorer_rc
+            .borrow()
+            .connect_row_expanded(move |tree_store, iter, _path| {
+                if let Some(child_iter) = tree_store.iter_children(Some(iter)) {
+                    let child_path: String = tree_store.get(&child_iter, 1);
+                    if child_path.is_empty() {
+                        file_explorer_clone2.borrow().expand_directory(iter);
+                    }
                 }
-            }
-        });
+            });
 
         // Update file explorer highlighting when switching tabs
         let file_explorer_clone3 = file_explorer_rc.clone();
         let editors_clone2 = editors.clone();
-        let notebook_clone = notebook.clone();
-        notebook_clone.connect_switch_page(move |_notebook, page, _page_num| {
-            // Find which editor corresponds to this page
+        notebook.connect_switch_page(move |_notebook, page, _page_num| {
             let editors = editors_clone2.borrow();
             for editor in editors.iter() {
                 if editor.content_row().upcast_ref::<gtk4::Widget>() == page {
@@ -646,7 +724,7 @@ pub fn build_ui(app: &Application) {
         });
     }
 
-    // File Explorer Context Menu Actions
+    // File Explorer Context Menu Actions (kept identical to original behavior)
     {
         // NEW FILE ACTION
         let action = SimpleAction::new("explorer-new-file", None);
@@ -661,7 +739,6 @@ pub fn build_ui(app: &Application) {
                     selected_path.parent().unwrap_or(&selected_path).to_path_buf()
                 };
 
-                // Create dialog for file name input
                 let dialog = Dialog::with_buttons(
                     Some("New File"),
                     Some(&window_clone),
@@ -683,7 +760,9 @@ pub fn build_ui(app: &Application) {
                     if response == ResponseType::Accept {
                         let file_name = entry.text();
                         if !file_name.is_empty() {
-                            if let Err(e) = file_explorer_clone2.borrow().create_file(&parent_dir, &file_name) {
+                            if let Err(e) =
+                                file_explorer_clone2.borrow().create_file(&parent_dir, &file_name)
+                            {
                                 eprintln!("Failed to create file: {}", e);
                             }
                         }
@@ -710,7 +789,6 @@ pub fn build_ui(app: &Application) {
                     selected_path.parent().unwrap_or(&selected_path).to_path_buf()
                 };
 
-                // Create dialog for folder name input
                 let dialog = Dialog::with_buttons(
                     Some("New Folder"),
                     Some(&window_clone),
@@ -732,7 +810,10 @@ pub fn build_ui(app: &Application) {
                     if response == ResponseType::Accept {
                         let folder_name = entry.text();
                         if !folder_name.is_empty() {
-                            if let Err(e) = file_explorer_clone2.borrow().create_directory(&parent_dir, &folder_name) {
+                            if let Err(e) = file_explorer_clone2
+                                .borrow()
+                                .create_directory(&parent_dir, &folder_name)
+                            {
                                 eprintln!("Failed to create folder: {}", e);
                             }
                         }
@@ -753,16 +834,16 @@ pub fn build_ui(app: &Application) {
 
         action.connect_activate(move |_, _| {
             if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
-                let file_name = selected_path.file_name()
+                let file_name = selected_path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("this item");
 
-                // Create confirmation dialog
                 let dialog = MessageDialog::new(
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
                     MessageType::Question,
-                    ButtonsType::YesNo,
+                    gtk4::ButtonsType::YesNo,
                     &format!("Are you sure you want to delete '{}'?", file_name),
                 );
 
@@ -770,7 +851,10 @@ pub fn build_ui(app: &Application) {
                 let selected_path_clone = selected_path.clone();
                 dialog.connect_response(move |dialog, response| {
                     if response == ResponseType::Yes {
-                        if let Err(e) = file_explorer_clone2.borrow().delete_file(&selected_path_clone) {
+                        if let Err(e) = file_explorer_clone2
+                            .borrow()
+                            .delete_file(&selected_path_clone)
+                        {
                             eprintln!("Failed to delete: {}", e);
                         }
                     }
@@ -790,12 +874,12 @@ pub fn build_ui(app: &Application) {
 
         action.connect_activate(move |_, _| {
             if let Some(selected_path) = file_explorer_clone.borrow().get_selected_path() {
-                let current_name = selected_path.file_name()
+                let current_name = selected_path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
 
-                // Create dialog for new name input
                 let dialog = Dialog::with_buttons(
                     Some("Rename"),
                     Some(&window_clone),
@@ -818,7 +902,10 @@ pub fn build_ui(app: &Application) {
                     if response == ResponseType::Accept {
                         let new_name = entry.text();
                         if !new_name.is_empty() && new_name.as_str() != current_name {
-                            if let Err(e) = file_explorer_clone2.borrow().rename_file(&selected_path_clone, &new_name) {
+                            if let Err(e) = file_explorer_clone2
+                                .borrow()
+                                .rename_file(&selected_path_clone, &new_name)
+                            {
                                 eprintln!("Failed to rename: {}", e);
                             }
                         }
@@ -836,8 +923,8 @@ pub fn build_ui(app: &Application) {
     window.present();
 }
 
-fn create_file_menu() -> MenuButton {
-    let menu_button = MenuButton::new();
+fn create_file_menu() -> gtk4::MenuButton {
+    let menu_button = gtk4::MenuButton::new();
     menu_button.set_label("File");
     menu_button.style_context().add_class("menubutton");
 
@@ -854,8 +941,8 @@ fn create_file_menu() -> MenuButton {
     menu_button
 }
 
-fn create_edit_menu() -> MenuButton {
-    let menu_button = MenuButton::new();
+fn create_edit_menu() -> gtk4::MenuButton {
+    let menu_button = gtk4::MenuButton::new();
     menu_button.set_label("Edit");
     menu_button.style_context().add_class("menubutton");
 
@@ -874,8 +961,8 @@ fn create_edit_menu() -> MenuButton {
     menu_button
 }
 
-fn create_view_menu() -> MenuButton {
-    let menu_button = MenuButton::new();
+fn create_view_menu() -> gtk4::MenuButton {
+    let menu_button = gtk4::MenuButton::new();
     menu_button.set_label("View");
     menu_button.style_context().add_class("menubutton");
 
