@@ -48,14 +48,14 @@ window {
     background: #efefef;
     color: #444;
     padding-left: 6px;
-    padding-right: 6px;
+    padding-right: 12px;
     padding-top: 0px;
     padding-bottom: 0px;
     margin-top: 0px;
     margin-bottom: 0px;
     font-family: monospace;
     font-size: 10pt;
-    line-height: 1.2;
+    line-height: 1.0;
 }
 .editor-view {
     font-family: monospace;
