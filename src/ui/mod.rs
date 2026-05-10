@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, process::Child, process::Command, process::Stdio};
 
@@ -20,6 +21,9 @@ use crate::editor::Editor;
 use crate::file_explorer::FileExplorer;
 use crate::find_replace::FindReplaceDialog;
 use crate::settings::{EditorSettings, IndentStyle};
+
+const RUN_POLL_INTERVAL_MS: u64 = 120;
+static RUN_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
@@ -217,12 +221,14 @@ pub fn build_ui(app: &Application) {
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
     let active_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
     let active_run_artifacts: Rc<RefCell<Option<RunArtifacts>>> = Rc::new(RefCell::new(None));
+    let active_next_step: Rc<RefCell<Option<RunNextStep>>> = Rc::new(RefCell::new(None));
 
     // RUN ACTION (runs current editor buffer in-process workflow)
     {
         let current_editor_clone = current_editor.clone();
         let active_child_clone = active_child.clone();
         let active_run_artifacts_clone = active_run_artifacts.clone();
+        let active_next_step_clone = active_next_step.clone();
         let output_buffer_clone = output_buffer.clone();
         let run_button_clone = run_button.clone();
         let stop_button_clone = stop_button.clone();
@@ -252,22 +258,36 @@ pub fn build_ui(app: &Application) {
             }
 
             let current_file = editor.current_file.borrow().clone();
-            let (mut command, run_artifacts, command_display) =
-                match build_run_command(&source_text, current_file.as_ref()) {
-                    Ok(spec) => spec,
-                    Err(err) => {
-                        append_output(&output_buffer_clone, &format!("{err}\n"));
-                        run_status_label_clone.set_text("Idle");
-                        return;
-                    }
-                };
+            let default_to_rust_runner = current_file.is_none();
+            let run_plan = match build_run_plan(&source_text, current_file.as_ref()) {
+                Ok(spec) => spec,
+                Err(err) => {
+                    append_output(&output_buffer_clone, &format!("{err}\n"));
+                    run_status_label_clone.set_text("Idle");
+                    return;
+                }
+            };
+            let RunPlan {
+                mut initial_command,
+                initial_display,
+                run_artifacts,
+                next_step,
+            } = run_plan;
 
             output_buffer_clone.set_text("");
-            append_output(&output_buffer_clone, &format!("$ {command_display}\n"));
+            if default_to_rust_runner {
+                append_output(
+                    &output_buffer_clone,
+                    "[No file extension detected, defaulting to Rust runner]\n",
+                );
+            }
+            append_output(&output_buffer_clone, &format!("$ {initial_display}\n"));
 
-            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            initial_command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
 
-            let mut child = match command.spawn() {
+            let mut child = match initial_command.spawn() {
                 Ok(child) => child,
                 Err(err) => {
                     append_output(
@@ -286,95 +306,121 @@ pub fn build_ui(app: &Application) {
                 glib::Continue(true)
             });
 
-            if let Some(stdout) = child.stdout.take() {
-                let sender_stdout = sender.clone();
-                std::thread::spawn(move || {
-                    let reader = BufReader::new(stdout);
-                    for line in reader.lines() {
-                        match line {
-                            Ok(text) => {
-                                let _ = sender_stdout.send(format!("{text}\n"));
-                            }
-                            Err(err) => {
-                                let _ = sender_stdout.send(format!("[stdout read error] {err}\n"));
-                                break;
-                            }
-                        }
-                    }
-                });
-            }
-
-            if let Some(stderr) = child.stderr.take() {
-                let sender_stderr = sender.clone();
-                std::thread::spawn(move || {
-                    let reader = BufReader::new(stderr);
-                    for line in reader.lines() {
-                        match line {
-                            Ok(text) => {
-                                let _ = sender_stderr.send(format!("{text}\n"));
-                            }
-                            Err(err) => {
-                                let _ = sender_stderr.send(format!("[stderr read error] {err}\n"));
-                                break;
-                            }
-                        }
-                    }
-                });
-            }
+            attach_output_threads(&mut child, &sender);
 
             run_button_clone.set_sensitive(false);
             stop_button_clone.set_sensitive(true);
             run_status_label_clone.set_text("Running");
             *active_run_artifacts_clone.borrow_mut() = Some(run_artifacts);
+            *active_next_step_clone.borrow_mut() = next_step;
             *active_child_clone.borrow_mut() = Some(child);
 
             let active_child_for_timer = active_child_clone.clone();
             let active_artifacts_for_timer = active_run_artifacts_clone.clone();
+            let active_next_step_for_timer = active_next_step_clone.clone();
             let run_button_for_timer = run_button_clone.clone();
             let stop_button_for_timer = stop_button_clone.clone();
             let run_status_for_timer = run_status_label_clone.clone();
             let output_for_timer = output_buffer_clone.clone();
+            let sender_for_timer = sender.clone();
 
-            glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
-                let mut exit_line: Option<String> = None;
-                let mut should_stop = false;
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(RUN_POLL_INTERVAL_MS),
+                move || {
+                    let mut should_stop = false;
+                    let mut exit_status: Option<Result<std::process::ExitStatus, std::io::Error>> =
+                        None;
 
-                {
-                    let mut child_slot = active_child_for_timer.borrow_mut();
-                    if let Some(child_ref) = child_slot.as_mut() {
-                        match child_ref.try_wait() {
-                            Ok(Some(status)) => {
-                                exit_line =
-                                    Some(format!("\n[process exited with status: {status}]\n"));
-                                should_stop = true;
+                    {
+                        let mut child_slot = active_child_for_timer.borrow_mut();
+                        if let Some(child_ref) = child_slot.as_mut() {
+                            match child_ref.try_wait() {
+                                Ok(Some(status)) => {
+                                    exit_status = Some(Ok(status));
+                                    should_stop = true;
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    exit_status = Some(Err(err));
+                                    should_stop = true;
+                                }
                             }
-                            Ok(None) => {}
-                            Err(err) => {
-                                exit_line = Some(format!("\n[process monitoring failed: {err}]\n"));
-                                should_stop = true;
-                            }
+                        } else {
+                            should_stop = true;
                         }
-                    } else {
-                        should_stop = true;
                     }
-                }
 
-                if should_stop {
-                    active_child_for_timer.borrow_mut().take();
-                    if let Some(artifacts) = active_artifacts_for_timer.borrow_mut().take() {
-                        cleanup_run_artifacts(&artifacts);
-                    }
-                    if let Some(line) = exit_line {
-                        append_output(&output_for_timer, &line);
-                    }
-                    run_button_for_timer.set_sensitive(true);
-                    stop_button_for_timer.set_sensitive(false);
-                    run_status_for_timer.set_text("Idle");
-                    return glib::Continue(false);
-                }
+                    if should_stop {
+                        active_child_for_timer.borrow_mut().take();
 
-                glib::Continue(true)
-            });
+                        match exit_status {
+                            Some(Ok(status)) => {
+                                if status.success() {
+                                    if let Some(next_step) =
+                                        active_next_step_for_timer.borrow_mut().take()
+                                    {
+                                        let (mut next_command, next_display) =
+                                            next_step.into_command();
+                                        append_output(
+                                            &output_for_timer,
+                                            &format!("$ {next_display}\n"),
+                                        );
+                                        next_command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+                                        match next_command.spawn() {
+                                            Ok(mut next_child) => {
+                                                attach_output_threads(
+                                                    &mut next_child,
+                                                    &sender_for_timer,
+                                                );
+                                                *active_child_for_timer.borrow_mut() =
+                                                    Some(next_child);
+                                                return glib::Continue(true);
+                                            }
+                                            Err(err) => {
+                                                append_output(
+                                                    &output_for_timer,
+                                                    &format!(
+                                                        "Failed to start execution process: {err}\n"
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        append_output(
+                                            &output_for_timer,
+                                            &format!("\n[process exited with status: {status}]\n"),
+                                        );
+                                    }
+                                } else {
+                                    append_output(
+                                        &output_for_timer,
+                                        &format!("\n[process exited with status: {status}]\n"),
+                                    );
+                                }
+                            }
+                            Some(Err(err)) => {
+                                append_output(
+                                    &output_for_timer,
+                                    &format!("\n[process monitoring failed: {err}]\n"),
+                                );
+                            }
+                            None => {}
+                        }
+
+                        active_next_step_for_timer.borrow_mut().take();
+                        if let Some(artifacts) = active_artifacts_for_timer.borrow_mut().take() {
+                            cleanup_run_artifacts(&artifacts);
+                        }
+                        run_button_for_timer.set_sensitive(true);
+                        stop_button_for_timer.set_sensitive(false);
+                        run_status_for_timer.set_text("Idle");
+                        return glib::Continue(false);
+                    }
+
+                    glib::Continue(true)
+                },
+            );
         });
     }
 
@@ -382,6 +428,7 @@ pub fn build_ui(app: &Application) {
     {
         let active_child_clone = active_child.clone();
         let active_run_artifacts_clone = active_run_artifacts.clone();
+        let active_next_step_clone = active_next_step.clone();
         let output_buffer_clone = output_buffer.clone();
         let run_button_clone = run_button.clone();
         let stop_button_clone = stop_button.clone();
@@ -397,6 +444,7 @@ pub fn build_ui(app: &Application) {
             if let Some(artifacts) = active_run_artifacts_clone.borrow_mut().take() {
                 cleanup_run_artifacts(&artifacts);
             }
+            active_next_step_clone.borrow_mut().take();
 
             run_button_clone.set_sensitive(true);
             stop_button_clone.set_sensitive(false);
@@ -1184,6 +1232,30 @@ struct RunArtifacts {
     binary_path: Option<PathBuf>,
 }
 
+#[derive(Debug)]
+struct RunPlan {
+    initial_command: Command,
+    initial_display: String,
+    run_artifacts: RunArtifacts,
+    next_step: Option<RunNextStep>,
+}
+
+#[derive(Debug)]
+enum RunNextStep {
+    ExecuteBinary(PathBuf),
+}
+
+impl RunNextStep {
+    fn into_command(self) -> (Command, String) {
+        match self {
+            RunNextStep::ExecuteBinary(binary_path) => {
+                let mut command = Command::new(&binary_path);
+                (command, format!("{}", binary_path.display()))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum RunLanguage {
     Rust,
@@ -1206,98 +1278,140 @@ fn detect_run_language(current_file: Option<&PathBuf>) -> Option<RunLanguage> {
     }
 }
 
-fn build_run_command(
-    source_text: &str,
-    current_file: Option<&PathBuf>,
-) -> Result<(Command, RunArtifacts, String), String> {
+fn build_run_plan(source_text: &str, current_file: Option<&PathBuf>) -> Result<RunPlan, String> {
     let language = detect_run_language(current_file).ok_or_else(|| {
         "Unsupported file type for Run. Supported extensions: .rs, .py, .js, .sh".to_string()
     })?;
 
-    let now = SystemTime::now()
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
+    let run_id = RUN_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let run_key = format!("{timestamp}_{run_id}");
 
     let temp_dir = std::env::temp_dir();
 
     match language {
         RunLanguage::Rust => {
-            let source_path = temp_dir.join(format!("fikby_run_{now}.rs"));
-            let binary_path = temp_dir.join(format!("fikby_run_{now}_bin"));
+            let source_path = temp_dir.join(format!("fikby_run_{run_key}.rs"));
+            let binary_path = temp_dir.join(format!("fikby_run_{run_key}_bin"));
+            let next_binary_path = binary_path.clone();
             fs::write(&source_path, source_text)
                 .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
 
-            let command_line = format!(
-                "rustc \"{}\" -o \"{}\" && \"{}\"",
-                source_path.display(),
-                binary_path.display(),
-                binary_path.display()
-            );
+            let mut compile_command = Command::new("rustc");
+            compile_command
+                .arg(&source_path)
+                .arg("-o")
+                .arg(&binary_path);
 
-            let mut command = Command::new("sh");
-            command.arg("-lc").arg(&command_line);
-
-            Ok((
-                command,
-                RunArtifacts {
+            Ok(RunPlan {
+                initial_command: compile_command,
+                initial_display: format!(
+                    "rustc {} -o {}",
+                    source_path.display(),
+                    binary_path.display()
+                ),
+                run_artifacts: RunArtifacts {
                     source_path,
                     binary_path: Some(binary_path),
                 },
-                command_line,
-            ))
+                next_step: Some(RunNextStep::ExecuteBinary(next_binary_path)),
+            })
         }
         RunLanguage::Python => {
-            let source_path = temp_dir.join(format!("fikby_run_{now}.py"));
+            let source_path = temp_dir.join(format!("fikby_run_{run_key}.py"));
             fs::write(&source_path, source_text)
                 .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
 
             let mut command = Command::new("python3");
             command.arg(&source_path);
 
-            Ok((
-                command,
-                RunArtifacts {
+            Ok(RunPlan {
+                initial_command: command,
+                initial_display: format!("python3 {}", source_path.display()),
+                run_artifacts: RunArtifacts {
                     source_path,
                     binary_path: None,
                 },
-                format!("python3 {}", source_path.display()),
-            ))
+                next_step: None,
+            })
         }
         RunLanguage::JavaScript => {
-            let source_path = temp_dir.join(format!("fikby_run_{now}.js"));
+            let source_path = temp_dir.join(format!("fikby_run_{run_key}.js"));
             fs::write(&source_path, source_text)
                 .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
 
             let mut command = Command::new("node");
             command.arg(&source_path);
 
-            Ok((
-                command,
-                RunArtifacts {
+            Ok(RunPlan {
+                initial_command: command,
+                initial_display: format!("node {}", source_path.display()),
+                run_artifacts: RunArtifacts {
                     source_path,
                     binary_path: None,
                 },
-                format!("node {}", source_path.display()),
-            ))
+                next_step: None,
+            })
         }
         RunLanguage::Shell => {
-            let source_path = temp_dir.join(format!("fikby_run_{now}.sh"));
+            let source_path = temp_dir.join(format!("fikby_run_{run_key}.sh"));
             fs::write(&source_path, source_text)
                 .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
 
             let mut command = Command::new("bash");
             command.arg(&source_path);
 
-            Ok((
-                command,
-                RunArtifacts {
+            Ok(RunPlan {
+                initial_command: command,
+                initial_display: format!("bash {}", source_path.display()),
+                run_artifacts: RunArtifacts {
                     source_path,
                     binary_path: None,
                 },
-                format!("bash {}", source_path.display()),
-            ))
+                next_step: None,
+            })
         }
+    }
+}
+
+fn attach_output_threads(child: &mut Child, sender: &glib::Sender<String>) {
+    if let Some(stdout) = child.stdout.take() {
+        let sender_stdout = sender.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(text) => {
+                        let _ = sender_stdout.send(format!("{text}\n"));
+                    }
+                    Err(err) => {
+                        let _ = sender_stdout.send(format!("[stdout read error] {err}\n"));
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        let sender_stderr = sender.clone();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(text) => {
+                        let _ = sender_stderr.send(format!("{text}\n"));
+                    }
+                    Err(err) => {
+                        let _ = sender_stderr.send(format!("[stderr read error] {err}\n"));
+                        break;
+                    }
+                }
+            }
+        });
     }
 }
 
