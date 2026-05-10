@@ -267,13 +267,13 @@ impl FileExplorer {
                         let menu = gio::Menu::new();
                         
                         if is_dir {
-                            menu.append(Some("New File"), Some("app.explorer-new-file"));
-                            menu.append(Some("New Folder"), Some("app.explorer-new-folder"));
-                            menu.append(Some("Delete Folder"), Some("app.explorer-delete"));
-                            menu.append(Some("Rename"), Some("app.explorer-rename"));
+                            menu.append(Some("New File"), Some("win.explorer-new-file"));
+                            menu.append(Some("New Folder"), Some("win.explorer-new-folder"));
+                            menu.append(Some("Delete Folder"), Some("win.explorer-delete"));
+                            menu.append(Some("Rename"), Some("win.explorer-rename"));
                         } else {
-                            menu.append(Some("Delete File"), Some("app.explorer-delete"));
-                            menu.append(Some("Rename"), Some("app.explorer-rename"));
+                            menu.append(Some("Delete File"), Some("win.explorer-delete"));
+                            menu.append(Some("Rename"), Some("win.explorer-rename"));
                         }
                         
                         let popover = PopoverMenu::from_model(Some(&menu));
