@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    gio, glib, CellRendererText, GestureClick, PopoverMenu, ScrolledWindow, TreeIter, TreePath,
-    TreeStore, TreeView, TreeViewColumn,
+    gio, glib, CellRendererText, PopoverMenu, ScrolledWindow, TreeIter, TreePath, TreeStore, 
+    TreeView, TreeViewColumn, GestureClick,
 };
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -24,10 +24,10 @@ impl FileExplorer {
     pub fn new() -> Rc<RefCell<Self>> {
         // Create TreeStore with columns: name, path, is_dir, icon_name
         let tree_store = TreeStore::new(&[
-            glib::Type::STRING, // Name
-            glib::Type::STRING, // Path
-            glib::Type::BOOL,   // Is directory
-            glib::Type::STRING, // Icon name
+            glib::Type::STRING,  // Name
+            glib::Type::STRING,  // Path
+            glib::Type::BOOL,    // Is directory
+            glib::Type::STRING,  // Icon name
         ]);
 
         let tree_view = TreeView::with_model(&tree_store);
@@ -73,12 +73,12 @@ impl FileExplorer {
     fn populate_tree(&self, path: &Path, parent: Option<&TreeIter>) {
         if let Ok(entries) = std::fs::read_dir(path) {
             let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-
+            
             // Sort: directories first, then files, alphabetically
             items.sort_by(|a, b| {
                 let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
                 let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
-
+                
                 match (a_is_dir, b_is_dir) {
                     (true, false) => std::cmp::Ordering::Less,
                     (false, true) => std::cmp::Ordering::Greater,
@@ -89,7 +89,7 @@ impl FileExplorer {
             for entry in items {
                 let file_name = entry.file_name();
                 let file_path = entry.path();
-
+                
                 // Skip hidden files (starting with .)
                 if let Some(name_str) = file_name.to_str() {
                     if name_str.starts_with('.') {
@@ -150,19 +150,18 @@ impl FileExplorer {
     where
         F: Fn(PathBuf, bool) + 'static,
     {
-        self.tree_view
-            .connect_row_activated(move |tree_view, path, _column| {
-                if let Some(model) = tree_view.model() {
-                    if let Some(iter) = model.iter(path) {
-                        let file_path: String = model.get(&iter, COL_PATH as i32);
-                        let is_dir: bool = model.get(&iter, COL_IS_DIR as i32);
-
-                        if !file_path.is_empty() {
-                            callback(PathBuf::from(file_path), is_dir);
-                        }
+        self.tree_view.connect_row_activated(move |tree_view, path, _column| {
+            if let Some(model) = tree_view.model() {
+                if let Some(iter) = model.iter(path) {
+                    let file_path: String = model.get(&iter, COL_PATH as i32);
+                    let is_dir: bool = model.get(&iter, COL_IS_DIR as i32);
+                    
+                    if !file_path.is_empty() {
+                        callback(PathBuf::from(file_path), is_dir);
                     }
                 }
-            });
+            }
+        });
     }
 
     pub fn connect_row_expanded<F>(&self, callback: F)
@@ -170,10 +169,9 @@ impl FileExplorer {
         F: Fn(&TreeStore, &TreeIter, &TreePath) + 'static,
     {
         let tree_store = self.tree_store.clone();
-        self.tree_view
-            .connect_row_expanded(move |_tree_view, iter, path| {
-                callback(&tree_store, iter, path);
-            });
+        self.tree_view.connect_row_expanded(move |_tree_view, iter, path| {
+            callback(&tree_store, iter, path);
+        });
     }
 
     pub fn expand_directory(&self, iter: &TreeIter) {
@@ -184,7 +182,7 @@ impl FileExplorer {
 
         // Get the directory path
         let dir_path: String = self.tree_store.get(iter, COL_PATH as i32);
-
+        
         // Populate with actual contents
         self.populate_tree(&PathBuf::from(dir_path), Some(iter));
     }
@@ -195,16 +193,11 @@ impl FileExplorer {
             // GTK4: path() returns TreePath directly, not Option<TreePath>
             let path = self.tree_store.path(&iter);
             self.tree_view.selection().select_path(&path);
-            self.tree_view
-                .scroll_to_cell(Some(&path), None::<&TreeViewColumn>, false, 0.0, 0.0);
+            self.tree_view.scroll_to_cell(Some(&path), None::<&TreeViewColumn>, false, 0.0, 0.0);
         }
     }
 
-    fn find_iter_for_path(
-        &self,
-        target_path: &Path,
-        parent: Option<&TreeIter>,
-    ) -> Option<TreeIter> {
+    fn find_iter_for_path(&self, target_path: &Path, parent: Option<&TreeIter>) -> Option<TreeIter> {
         let iter = if let Some(parent_iter) = parent {
             self.tree_store.iter_children(Some(parent_iter))
         } else {
@@ -254,25 +247,25 @@ impl FileExplorer {
     pub fn setup_context_menu(&self, _app: &gtk4::Application) {
         let tree_view = self.tree_view.clone();
         let tree_store = self.tree_store.clone();
-
+        
         // Right-click gesture
         let gesture = GestureClick::new();
         gesture.set_button(3); // Right mouse button
-
+        
         gesture.connect_pressed(move |_gesture, _n_press, x, y| {
             // Get the path at the click position
             if let Some((Some(path), _, _, _)) = tree_view.path_at_pos(x as i32, y as i32) {
                 // Select the item
                 tree_view.selection().select_path(&path);
-
+                
                 if let Some(iter) = tree_store.iter(&path) {
                     let file_path: String = tree_store.get(&iter, COL_PATH as i32);
                     let is_dir: bool = tree_store.get(&iter, COL_IS_DIR as i32);
-
+                    
                     if !file_path.is_empty() {
                         // Create context menu
                         let menu = gio::Menu::new();
-
+                        
                         if is_dir {
                             menu.append(Some("New File"), Some("win.explorer-new-file"));
                             menu.append(Some("New Folder"), Some("win.explorer-new-folder"));
@@ -282,18 +275,16 @@ impl FileExplorer {
                             menu.append(Some("Delete File"), Some("win.explorer-delete"));
                             menu.append(Some("Rename"), Some("win.explorer-rename"));
                         }
-
+                        
                         let popover = PopoverMenu::from_model(Some(&menu));
                         popover.set_parent(&tree_view);
-                        popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
-                            x as i32, y as i32, 1, 1,
-                        )));
+                        popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                         popover.popup();
                     }
                 }
             }
         });
-
+        
         self.tree_view.add_controller(gesture);
     }
 

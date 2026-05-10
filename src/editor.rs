@@ -1,9 +1,9 @@
-use glib::clone;
 use gtk4::prelude::*;
 use gtk4::{
     gdk, Align, Box as GtkBox, Button, DrawingArea, EventControllerKey, Image, Inhibit, Label,
     Overlay, PolicyType, ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode,
 };
+use glib::clone;
 use ropey::Rope;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -301,54 +301,52 @@ impl Editor {
             let buffer_clone = main_buffer.clone();
             let view_clone = main_view.clone();
 
-            line_numbers.set_draw_func(
-                clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, height| {
-                    let visible_rect = view_clone.visible_rect();
-                    let top_y = visible_rect.y();
-                    let bottom_y = top_y + visible_rect.height();
+            line_numbers.set_draw_func(clone!(@strong buffer_clone, @strong view_clone => move |_area, cr, width, height| {
+                let visible_rect = view_clone.visible_rect();
+                let top_y = visible_rect.y();
+                let bottom_y = top_y + visible_rect.height();
 
-                    let top_iter = view_clone.iter_at_location(0, top_y);
-                    let bottom_iter = view_clone.iter_at_location(0, bottom_y);
+                let top_iter = view_clone.iter_at_location(0, top_y);
+                let bottom_iter = view_clone.iter_at_location(0, bottom_y);
 
-                    let first_line = top_iter.map(|iter| iter.line()).unwrap_or(0);
-                    let last_line = bottom_iter
-                        .map(|iter| iter.line())
-                        .unwrap_or(buffer_clone.line_count().saturating_sub(1));
+                let first_line = top_iter.map(|iter| iter.line()).unwrap_or(0);
+                let last_line = bottom_iter
+                    .map(|iter| iter.line())
+                    .unwrap_or(buffer_clone.line_count().saturating_sub(1));
 
-                    let pango_context = view_clone.pango_context();
-                    let font_desc = pango_context.font_description().unwrap();
-                    let layout = gtk4::pango::Layout::new(&pango_context);
-                    layout.set_font_description(Some(&font_desc));
-                    layout.set_alignment(gtk4::pango::Alignment::Right);
-                    layout.set_width((width - 10) * gtk4::pango::SCALE);
+                let pango_context = view_clone.pango_context();
+                let font_desc = pango_context.font_description().unwrap();
+                let layout = gtk4::pango::Layout::new(&pango_context);
+                layout.set_font_description(Some(&font_desc));
+                layout.set_alignment(gtk4::pango::Alignment::Right);
+                layout.set_width((width - 10) * gtk4::pango::SCALE);
 
-                    let style_context = view_clone.style_context();
-                    let fg_color = style_context.color();
-                    cr.set_source_rgba(
-                        fg_color.red() as f64,
-                        fg_color.green() as f64,
-                        fg_color.blue() as f64,
-                        fg_color.alpha() as f64,
-                    );
+                let style_context = view_clone.style_context();
+                let fg_color = style_context.color();
+                cr.set_source_rgba(
+                    fg_color.red() as f64,
+                    fg_color.green() as f64,
+                    fg_color.blue() as f64,
+                    fg_color.alpha() as f64,
+                );
 
-                    for line_num in first_line..=last_line {
-                        if let Some(iter) = buffer_clone.iter_at_line(line_num) {
-                            let location = view_clone.iter_location(&iter);
-                            let (_, window_y) = view_clone.buffer_to_window_coords(
-                                gtk4::TextWindowType::Widget,
-                                0,
-                                location.y(),
-                            );
+                for line_num in first_line..=last_line {
+                    if let Some(iter) = buffer_clone.iter_at_line(line_num) {
+                        let location = view_clone.iter_location(&iter);
+                        let (_, window_y) = view_clone.buffer_to_window_coords(
+                            gtk4::TextWindowType::Widget,
+                            0,
+                            location.y(),
+                        );
 
-                            if window_y >= 0 && window_y < height {
-                                layout.set_text(&(line_num + 1).to_string());
-                                cr.move_to(5.0, window_y as f64);
-                                pangocairo::functions::show_layout(cr, &layout);
-                            }
+                        if window_y >= 0 && window_y < height {
+                            layout.set_text(&(line_num + 1).to_string());
+                            cr.move_to(5.0, window_y as f64);
+                            pangocairo::functions::show_layout(cr, &layout);
                         }
                     }
-                }),
-            );
+                }
+            }));
         }
 
         // Update line numbers when buffer changes
@@ -430,9 +428,8 @@ impl Editor {
 
             buffer.begin_user_action();
             for line_num in start_line..=end_line {
-                let mut line_start = buffer
-                    .iter_at_line(line_num)
-                    .unwrap_or_else(|| buffer.start_iter());
+                let mut line_start =
+                    buffer.iter_at_line(line_num).unwrap_or_else(|| buffer.start_iter());
                 buffer.insert(&mut line_start, &indent);
             }
             buffer.end_user_action();
@@ -610,13 +607,11 @@ impl Editor {
             let ss = self.ss.clone();
             let theme = self.theme.clone();
 
-            glib::idle_add_local(
-                clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
-                    let theme_ref = theme.borrow();
-                    highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
-                    glib::Continue(false)
-                }),
-            );
+            glib::idle_add_local(clone!(@strong buffer, @strong tag_cache, @strong ss, @strong theme => @default-return glib::Continue(false), move || {
+                let theme_ref = theme.borrow();
+                highlight::highlight_with_syntect(&buffer, &content_clone, &*tag_cache, &ss, &**theme_ref);
+                glib::Continue(false)
+            }));
         }
     }
 
@@ -668,8 +663,7 @@ impl Editor {
         } else {
             // Wrap around to beginning
             start = self.main_buffer.start_iter();
-            if let Some((mut match_start, match_end)) =
-                start.forward_search(search_text, flags, None)
+            if let Some((mut match_start, match_end)) = start.forward_search(search_text, flags, None)
             {
                 self.main_buffer.select_range(&match_start, &match_end);
                 self.main_view
@@ -705,7 +699,12 @@ impl Editor {
         false
     }
 
-    pub fn replace_all(&self, search_text: &str, replace_text: &str, case_sensitive: bool) -> i32 {
+    pub fn replace_all(
+        &self,
+        search_text: &str,
+        replace_text: &str,
+        case_sensitive: bool,
+    ) -> i32 {
         let flags = if case_sensitive {
             gtk4::TextSearchFlags::empty()
         } else {

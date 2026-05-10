@@ -40,9 +40,7 @@ pub fn highlight_with_syntect(
     }
 
     // Choose syntax (for now Rust); caller should only call when appropriate
-    let syntax = ss
-        .find_syntax_by_extension("rs")
-        .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = ss.find_syntax_by_extension("rs").unwrap_or_else(|| ss.find_syntax_plain_text());
     let mut h = HighlightLines::new(syntax, theme);
 
     let mut cumulative_chars: usize = 0;
