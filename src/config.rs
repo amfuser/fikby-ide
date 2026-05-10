@@ -13,7 +13,7 @@ impl ThemeMode {
             ThemeMode::Dark => DARK_CSS,
         }
     }
-    
+
     pub fn syntax_theme_name(&self) -> &'static str {
         match self {
             ThemeMode::Light => "base16-ocean.light",

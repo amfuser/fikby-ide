@@ -1,12 +1,20 @@
+use gtk4::gio::SimpleAction;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, ComboBoxText, Dialog, Entry, Grid,
-    Label, MessageDialog, MessageType, Notebook, Orientation, Paned, Popover, PopoverMenu,
-    ResponseType, SpinButton,
+    Label, MessageDialog, MessageType, Notebook, Orientation, Paned, PolicyType, Popover,
+    PopoverMenu, ResponseType, ScrolledWindow, SpinButton, TextView, WrapMode,
 };
-use gtk4::gio::SimpleAction;
 use std::cell::RefCell;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -16,6 +24,11 @@ use crate::editor::Editor;
 use crate::file_explorer::FileExplorer;
 use crate::find_replace::FindReplaceDialog;
 use crate::settings::{EditorSettings, IndentStyle};
+
+enum RunEvent {
+    Append { run_id: u64, text: String },
+    Finished { run_id: u64, status: String },
+}
 
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
@@ -54,6 +67,19 @@ pub fn build_ui(app: &Application) {
     let right_box = GtkBox::new(Orientation::Horizontal, 0);
     right_box.set_hexpand(true);
     right_box.set_halign(gtk4::Align::End);
+
+    let run_btn = Button::new();
+    run_btn.set_icon_name("media-playback-start-symbolic");
+    run_btn.set_tooltip_text(Some("Run current editor code"));
+    run_btn.style_context().add_class("right-button");
+    right_box.append(&run_btn);
+
+    let stop_btn = Button::new();
+    stop_btn.set_icon_name("media-playback-stop-symbolic");
+    stop_btn.set_tooltip_text(Some("Stop running code"));
+    stop_btn.set_sensitive(false);
+    stop_btn.style_context().add_class("right-button");
+    right_box.append(&stop_btn);
 
     let settings_btn = Button::new();
     settings_btn.set_icon_name("emblem-system-symbolic");
@@ -160,6 +186,28 @@ pub fn build_ui(app: &Application) {
     notebook.set_hexpand(true);
     notebook.set_size_request(-1, 100);
 
+    let output_view = TextView::new();
+    output_view.set_editable(false);
+    output_view.set_cursor_visible(false);
+    output_view.set_monospace(true);
+    output_view.set_wrap_mode(WrapMode::WordChar);
+
+    let output_buffer = output_view.buffer();
+    output_buffer.set_text("Output console ready.\n");
+
+    let output_scrolled = ScrolledWindow::builder()
+        .child(&output_view)
+        .vexpand(false)
+        .hexpand(true)
+        .min_content_height(120)
+        .hscrollbar_policy(PolicyType::Automatic)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .build();
+
+    let editor_area = GtkBox::new(Orientation::Vertical, 0);
+    editor_area.append(&notebook);
+    editor_area.append(&output_scrolled);
+
     // Status bar
     let status_bar = GtkBox::new(Orientation::Horizontal, 10);
     status_bar.style_context().add_class("status");
@@ -172,7 +220,7 @@ pub fn build_ui(app: &Application) {
     status_bar.append(&status_label);
     status_bar.append(&status_info_label);
 
-    paned.set_end_child(Some(&notebook));
+    paned.set_end_child(Some(&editor_area));
     vbox.append(&paned);
     vbox.append(&status_bar);
 
@@ -181,6 +229,249 @@ pub fn build_ui(app: &Application) {
     // Store references in Rc<RefCell<>> for sharing
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
+    let running_child: Rc<RefCell<Option<Arc<Mutex<Option<std::process::Child>>>>>> =
+        Rc::new(RefCell::new(None));
+    let current_run_id = Rc::new(RefCell::new(0u64));
+    let run_generation = Arc::new(AtomicU64::new(0));
+    let (run_tx, run_rx) = glib::MainContext::channel::<RunEvent>(glib::Priority::default());
+
+    {
+        let output_buffer_clone = output_buffer.clone();
+        let run_btn_clone = run_btn.clone();
+        let stop_btn_clone = stop_btn.clone();
+        let status_info_label_clone = status_info_label.clone();
+        let running_child_clone = running_child.clone();
+        let current_run_id_clone = current_run_id.clone();
+
+        run_rx.attach(None, move |event| {
+            match event {
+                RunEvent::Append { run_id, text } => {
+                    if run_id == *current_run_id_clone.borrow() {
+                        append_to_output(&output_buffer_clone, &text);
+                    }
+                }
+                RunEvent::Finished { run_id, status } => {
+                    if run_id == *current_run_id_clone.borrow() {
+                        append_to_output(&output_buffer_clone, &format!("\n{}\n", status));
+                        status_info_label_clone.set_text(&status);
+                        run_btn_clone.set_sensitive(true);
+                        stop_btn_clone.set_sensitive(false);
+                        *running_child_clone.borrow_mut() = None;
+                    }
+                }
+            }
+            glib::Continue(true)
+        });
+    }
+
+    {
+        let current_editor_clone = current_editor.clone();
+        let running_child_clone = running_child.clone();
+        let current_run_id_clone = current_run_id.clone();
+        let run_generation_clone = run_generation.clone();
+        let run_btn_clone = run_btn.clone();
+        let stop_btn_clone = stop_btn.clone();
+        let status_info_label_clone = status_info_label.clone();
+        let output_buffer_clone = output_buffer.clone();
+        let run_tx_clone = run_tx.clone();
+
+        run_btn.connect_clicked(move |_| {
+            if running_child_clone.borrow().is_some() {
+                return;
+            }
+
+            let Some(editor) = current_editor_clone.borrow().as_ref().cloned() else {
+                append_to_output(&output_buffer_clone, "\nNo active editor tab to run.\n");
+                status_info_label_clone.set_text("No active editor tab");
+                return;
+            };
+
+            let source = editor.get_text();
+            if source.trim().is_empty() {
+                append_to_output(&output_buffer_clone, "\nCannot run empty editor content.\n");
+                status_info_label_clone.set_text("Cannot run empty editor content");
+                return;
+            }
+
+            let source_path =
+                match write_source_to_temp_file(editor.current_file.borrow().clone(), &source) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        append_to_output(
+                            &output_buffer_clone,
+                            &format!("\nFailed to prepare source file: {}\n", err),
+                        );
+                        status_info_label_clone.set_text("Failed to prepare source file");
+                        return;
+                    }
+                };
+
+            let mut command = match build_execution_command(&source_path) {
+                Ok(cmd) => cmd,
+                Err(err) => {
+                    append_to_output(&output_buffer_clone, &format!("\n{}\n", err));
+                    status_info_label_clone.set_text("No runtime configured");
+                    return;
+                }
+            };
+
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(err) => {
+                    append_to_output(
+                        &output_buffer_clone,
+                        &format!("\nFailed to start execution: {}\n", err),
+                    );
+                    status_info_label_clone.set_text("Failed to start execution");
+                    return;
+                }
+            };
+
+            let run_id = run_generation_clone.fetch_add(1, Ordering::Relaxed) + 1;
+            *current_run_id_clone.borrow_mut() = run_id;
+            run_btn_clone.set_sensitive(false);
+            stop_btn_clone.set_sensitive(true);
+            status_info_label_clone.set_text("Running");
+
+            append_to_output(
+                &output_buffer_clone,
+                &format!("\n▶ Running {}\n", source_path.display()),
+            );
+
+            if let Some(stdout) = child.stdout.take() {
+                let tx_out = run_tx_clone.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stdout).lines() {
+                        match line {
+                            Ok(line) => {
+                                let _ = tx_out.send(RunEvent::Append {
+                                    run_id,
+                                    text: format!("{}\n", line),
+                                });
+                            }
+                            Err(err) => {
+                                let _ = tx_out.send(RunEvent::Append {
+                                    run_id,
+                                    text: format!("stdout read error: {}\n", err),
+                                });
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
+            if let Some(stderr) = child.stderr.take() {
+                let tx_err = run_tx_clone.clone();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stderr).lines() {
+                        match line {
+                            Ok(line) => {
+                                let _ = tx_err.send(RunEvent::Append {
+                                    run_id,
+                                    text: format!("{}\n", line),
+                                });
+                            }
+                            Err(err) => {
+                                let _ = tx_err.send(RunEvent::Append {
+                                    run_id,
+                                    text: format!("stderr read error: {}\n", err),
+                                });
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
+            let child_arc = Arc::new(Mutex::new(Some(child)));
+            *running_child_clone.borrow_mut() = Some(child_arc.clone());
+
+            let tx_wait = run_tx_clone.clone();
+            std::thread::spawn(move || loop {
+                let status = {
+                    let mut child_slot = match child_arc.lock() {
+                        Ok(slot) => slot,
+                        Err(_) => {
+                            let _ = tx_wait.send(RunEvent::Finished {
+                                run_id,
+                                status: "Execution state is unavailable".to_string(),
+                            });
+                            return;
+                        }
+                    };
+
+                    if let Some(child) = child_slot.as_mut() {
+                        match child.try_wait() {
+                            Ok(Some(exit_status)) => {
+                                *child_slot = None;
+                                Some(format_exit_status(exit_status))
+                            }
+                            Ok(None) => None,
+                            Err(err) => {
+                                *child_slot = None;
+                                Some(format!("Execution failed: {}", err))
+                            }
+                        }
+                    } else {
+                        Some("Execution stopped".to_string())
+                    }
+                };
+
+                if let Some(status) = status {
+                    let _ = tx_wait.send(RunEvent::Finished { run_id, status });
+                    break;
+                }
+
+                std::thread::sleep(Duration::from_millis(100));
+            });
+        });
+    }
+
+    {
+        let running_child_clone = running_child.clone();
+        let stop_btn_clone = stop_btn.clone();
+        let status_info_label_clone = status_info_label.clone();
+        let output_buffer_clone = output_buffer.clone();
+
+        stop_btn.connect_clicked(move |_| {
+            let Some(child_arc) = running_child_clone.borrow().as_ref().cloned() else {
+                return;
+            };
+
+            stop_btn_clone.set_sensitive(false);
+            status_info_label_clone.set_text("Stopping");
+            append_to_output(&output_buffer_clone, "\n■ Stopping execution...\n");
+
+            let kill_result = {
+                let mut guard = match child_arc.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        append_to_output(
+                            &output_buffer_clone,
+                            "Failed to lock running process for stop.\n",
+                        );
+                        return;
+                    }
+                };
+
+                if let Some(child) = guard.as_mut() {
+                    child.kill()
+                } else {
+                    Ok(())
+                }
+            };
+
+            if let Err(err) = kill_result {
+                append_to_output(
+                    &output_buffer_clone,
+                    &format!("Failed to stop process: {}\n", err),
+                );
+            }
+        });
+    }
 
     // NEW FILE ACTION
     {
@@ -205,7 +496,8 @@ pub fn build_ui(app: &Application) {
                 settings_clone.clone(),
             );
 
-            let page_index = notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
+            let page_index =
+                notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
             notebook_clone.set_current_page(Some(page_index));
 
             editor.update(&status_label_clone, &status_info_label_clone);
@@ -669,45 +961,47 @@ pub fn build_ui(app: &Application) {
         let status_info_label_clone = status_info_label.clone();
         let settings_clone = editor_settings.clone();
 
-        file_explorer_rc.borrow().connect_row_activated(move |path_buf, is_dir| {
-            if !is_dir {
-                if let Ok(content) = std::fs::read_to_string(&path_buf) {
-                    let theme_clone = current_theme_clone.borrow().clone();
-                    let editor = Editor::new(
-                        "File",
-                        Some(content),
-                        Some(path_buf.clone()),
-                        ss_clone.clone(),
-                        theme_clone,
-                        settings_clone.clone(),
-                    );
+        file_explorer_rc
+            .borrow()
+            .connect_row_activated(move |path_buf, is_dir| {
+                if !is_dir {
+                    if let Ok(content) = std::fs::read_to_string(&path_buf) {
+                        let theme_clone = current_theme_clone.borrow().clone();
+                        let editor = Editor::new(
+                            "File",
+                            Some(content),
+                            Some(path_buf.clone()),
+                            ss_clone.clone(),
+                            theme_clone,
+                            settings_clone.clone(),
+                        );
 
-                    let page_index =
-                        notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
-                    notebook_clone.set_current_page(Some(page_index));
-                    editor.update(&status_label_clone, &status_info_label_clone);
+                        let page_index =
+                            notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
+                        notebook_clone.set_current_page(Some(page_index));
+                        editor.update(&status_label_clone, &status_info_label_clone);
 
-                    editors_clone.borrow_mut().push(editor.clone());
-                    *current_editor_clone.borrow_mut() = Some(editor.clone());
+                        editors_clone.borrow_mut().push(editor.clone());
+                        *current_editor_clone.borrow_mut() = Some(editor.clone());
 
-                    file_explorer_clone.borrow().highlight_file(&path_buf);
+                        file_explorer_clone.borrow().highlight_file(&path_buf);
 
-                    let notebook_clone2 = notebook_clone.clone();
-                    let editors_clone2 = editors_clone.clone();
-                    let editor_clone = editor.clone();
-                    editor.close_button.connect_clicked(move |_| {
-                        if let Some(page_num) =
-                            notebook_clone2.page_num(&editor_clone.content_row())
-                        {
-                            notebook_clone2.remove_page(Some(page_num));
-                            editors_clone2
-                                .borrow_mut()
-                                .retain(|e| !Rc::ptr_eq(e, &editor_clone));
-                        }
-                    });
+                        let notebook_clone2 = notebook_clone.clone();
+                        let editors_clone2 = editors_clone.clone();
+                        let editor_clone = editor.clone();
+                        editor.close_button.connect_clicked(move |_| {
+                            if let Some(page_num) =
+                                notebook_clone2.page_num(&editor_clone.content_row())
+                            {
+                                notebook_clone2.remove_page(Some(page_num));
+                                editors_clone2
+                                    .borrow_mut()
+                                    .retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                            }
+                        });
+                    }
                 }
-            }
-        });
+            });
 
         // Directory expansion
         let file_explorer_clone2 = file_explorer_rc.clone();
@@ -750,14 +1044,20 @@ pub fn build_ui(app: &Application) {
                 let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
                     selected_path.clone()
                 } else {
-                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                    selected_path
+                        .parent()
+                        .unwrap_or(&selected_path)
+                        .to_path_buf()
                 };
 
                 let dialog = Dialog::with_buttons(
                     Some("New File"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Create", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -774,8 +1074,9 @@ pub fn build_ui(app: &Application) {
                     if response == ResponseType::Accept {
                         let file_name = entry.text();
                         if !file_name.is_empty() {
-                            if let Err(e) =
-                                file_explorer_clone2.borrow().create_file(&parent_dir, &file_name)
+                            if let Err(e) = file_explorer_clone2
+                                .borrow()
+                                .create_file(&parent_dir, &file_name)
                             {
                                 eprintln!("Failed to create file: {}", e);
                             }
@@ -800,14 +1101,20 @@ pub fn build_ui(app: &Application) {
                 let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
                     selected_path.clone()
                 } else {
-                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                    selected_path
+                        .parent()
+                        .unwrap_or(&selected_path)
+                        .to_path_buf()
                 };
 
                 let dialog = Dialog::with_buttons(
                     Some("New Folder"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Create", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -898,7 +1205,10 @@ pub fn build_ui(app: &Application) {
                     Some("Rename"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Rename", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Rename", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -954,6 +1264,110 @@ fn create_file_menu() -> gtk4::MenuButton {
     menu_button.set_popover(Some(&popover));
 
     menu_button
+}
+
+fn append_to_output(buffer: &gtk4::TextBuffer, text: &str) {
+    let mut iter = buffer.end_iter();
+    buffer.insert(&mut iter, text);
+}
+
+fn write_source_to_temp_file(
+    current_file: Option<PathBuf>,
+    source: &str,
+) -> Result<PathBuf, std::io::Error> {
+    let extension = current_file
+        .as_ref()
+        .and_then(|path| path.extension().and_then(|ext| ext.to_str()))
+        .unwrap_or("txt");
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis();
+    let file_name = format!("fikby_run_{}.{}", timestamp, extension);
+    let source_path = std::env::temp_dir().join(file_name);
+    std::fs::write(&source_path, source)?;
+    Ok(source_path)
+}
+
+fn build_execution_command(source_path: &PathBuf) -> Result<Command, String> {
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    match extension.as_str() {
+        "py" => {
+            let mut cmd = Command::new("python3");
+            cmd.arg(source_path);
+            Ok(cmd)
+        }
+        "js" => {
+            let mut cmd = Command::new("node");
+            cmd.arg(source_path);
+            Ok(cmd)
+        }
+        "sh" => {
+            let mut cmd = Command::new("bash");
+            cmd.arg(source_path);
+            Ok(cmd)
+        }
+        "rb" => {
+            let mut cmd = Command::new("ruby");
+            cmd.arg(source_path);
+            Ok(cmd)
+        }
+        "go" => {
+            let mut cmd = Command::new("go");
+            cmd.args(["run", source_path.to_string_lossy().as_ref()]);
+            Ok(cmd)
+        }
+        "rs" => {
+            let binary_path = source_path.with_extension("run-bin");
+            let shell = format!(
+                "rustc '{}' -o '{}' && exec '{}'",
+                source_path.to_string_lossy(),
+                binary_path.to_string_lossy(),
+                binary_path.to_string_lossy()
+            );
+            let mut cmd = Command::new("bash");
+            cmd.args(["-lc", &shell]);
+            Ok(cmd)
+        }
+        _ => Err("Run is supported for .py, .js, .sh, .rb, .go, and .rs files.".to_string()),
+    }
+}
+
+fn format_exit_status(status: std::process::ExitStatus) -> String {
+    if status.success() {
+        "Execution completed successfully".to_string()
+    } else {
+        match status.code() {
+            Some(code) => format!("Execution exited with code {}", code),
+            None => "Execution terminated by signal".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_execution_command;
+    use std::path::PathBuf;
+
+    #[test]
+    fn build_execution_command_rejects_unknown_extensions() {
+        let path = PathBuf::from("/tmp/example.txt");
+        let result = build_execution_command(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_execution_command_supports_python() {
+        let path = PathBuf::from("/tmp/example.py");
+        let command = build_execution_command(&path).expect("python command should be built");
+        assert_eq!(command.get_program().to_string_lossy(), "python3");
+    }
 }
 
 fn create_edit_menu() -> gtk4::MenuButton {

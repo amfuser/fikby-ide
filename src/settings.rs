@@ -28,7 +28,10 @@ enum Backend {
     /// Uses real GSettings (persistent).
     GSettings(Settings),
     /// Fallback when schema is missing (non-persistent, but app keeps running).
-    Fallback { indent_style: IndentStyle, indent_width: i32 },
+    Fallback {
+        indent_style: IndentStyle,
+        indent_width: i32,
+    },
 }
 
 #[derive(Debug, Clone)]

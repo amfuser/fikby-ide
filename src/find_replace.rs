@@ -1,7 +1,5 @@
 use gtk4::prelude::*;
-use gtk4::{
-    Box as GtkBox, Button, CheckButton, Dialog, Entry, Grid, Label, Orientation,
-};
+use gtk4::{Box as GtkBox, Button, CheckButton, Dialog, Entry, Grid, Label, Orientation};
 use std::rc::Rc;
 
 use crate::editor::Editor;
@@ -32,10 +30,7 @@ impl FindReplaceDialog {
         content_area.set_margin_end(10);
 
         // Create grid for layout
-        let grid = Grid::builder()
-            .column_spacing(10)
-            .row_spacing(10)
-            .build();
+        let grid = Grid::builder().column_spacing(10).row_spacing(10).build();
 
         // Find label and entry
         let find_label = Label::new(Some("Find:"));
@@ -146,7 +141,8 @@ impl FindReplaceDialog {
                 }
 
                 let case_sensitive = case_sensitive_clone.is_active();
-                let replaced = editor_clone.replace_current(&search_text, &replace_text, case_sensitive);
+                let replaced =
+                    editor_clone.replace_current(&search_text, &replace_text, case_sensitive);
 
                 // After replacing, find next occurrence
                 if replaced {
