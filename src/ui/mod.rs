@@ -227,7 +227,7 @@ pub fn build_ui(app: &Application) {
             });
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // OPEN FILE ACTION
@@ -311,7 +311,7 @@ pub fn build_ui(app: &Application) {
             dialog.show();
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // SAVE ACTION
@@ -354,7 +354,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // SAVE AS ACTION
@@ -391,15 +391,28 @@ pub fn build_ui(app: &Application) {
             }
         });
 
+        window.add_action(&action);
+    }
+
+    // QUIT ACTION — closes the currently focused window
+    {
+        let action = SimpleAction::new("quit", None);
+        let app_clone = app.clone();
+        action.connect_activate(move |_, _| {
+            if let Some(win) = app_clone.active_window() {
+                win.close();
+            }
+        });
         app.add_action(&action);
     }
 
-    // QUIT ACTION
+    // NEW WINDOW ACTION — opens a second independent IDE window
     {
-        let action = SimpleAction::new("quit", None);
-        let window_clone = window.clone();
-
-        action.connect_activate(move |_, _| window_clone.close());
+        let action = SimpleAction::new("new-window", None);
+        let app_clone = app.clone();
+        action.connect_activate(move |_, _| {
+            build_ui(&app_clone);
+        });
         app.add_action(&action);
     }
 
@@ -414,7 +427,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // REDO ACTION
@@ -428,7 +441,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // CUT ACTION
@@ -442,7 +455,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // COPY ACTION
@@ -459,7 +472,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // PASTE ACTION
@@ -473,7 +486,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // FIND ACTION
@@ -498,7 +511,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // REPLACE ACTION
@@ -523,7 +536,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // TOGGLE WRAP ACTION
@@ -537,7 +550,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // TOGGLE THEME ACTION (updates UI CSS + syntect highlighting theme)
@@ -576,7 +589,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     // Update current editor when switching tabs
@@ -599,19 +612,20 @@ pub fn build_ui(app: &Application) {
     }
 
     // Shortcuts
-    app.set_accels_for_action("app.new", &["<Ctrl>N"]);
-    app.set_accels_for_action("app.open", &["<Ctrl>O"]);
-    app.set_accels_for_action("app.save", &["<Ctrl>S"]);
-    app.set_accels_for_action("app.save-as", &["<Ctrl><Shift>S"]);
+    app.set_accels_for_action("win.new", &["<Ctrl>N"]);
+    app.set_accels_for_action("win.open", &["<Ctrl>O"]);
+    app.set_accels_for_action("win.save", &["<Ctrl>S"]);
+    app.set_accels_for_action("win.save-as", &["<Ctrl><Shift>S"]);
     app.set_accels_for_action("app.quit", &["<Ctrl>Q"]);
-    app.set_accels_for_action("app.undo", &["<Ctrl>Z"]);
-    app.set_accels_for_action("app.redo", &["<Ctrl><Shift>Z"]);
-    app.set_accels_for_action("app.cut", &["<Ctrl>X"]);
-    app.set_accels_for_action("app.copy", &["<Ctrl>C"]);
-    app.set_accels_for_action("app.paste", &["<Ctrl>V"]);
-    app.set_accels_for_action("app.find", &["<Ctrl>F"]);
-    app.set_accels_for_action("app.replace", &["<Ctrl>H"]);
-    app.set_accels_for_action("app.toggle-theme", &["<Ctrl>T"]);
+    app.set_accels_for_action("app.new-window", &["<Ctrl><Shift>N"]);
+    app.set_accels_for_action("win.undo", &["<Ctrl>Z"]);
+    app.set_accels_for_action("win.redo", &["<Ctrl><Shift>Z"]);
+    app.set_accels_for_action("win.cut", &["<Ctrl>X"]);
+    app.set_accels_for_action("win.copy", &["<Ctrl>C"]);
+    app.set_accels_for_action("win.paste", &["<Ctrl>V"]);
+    app.set_accels_for_action("win.find", &["<Ctrl>F"]);
+    app.set_accels_for_action("win.replace", &["<Ctrl>H"]);
+    app.set_accels_for_action("win.toggle-theme", &["<Ctrl>T"]);
 
     // Create initial empty tab
     let initial_editor = Editor::new(
@@ -774,7 +788,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
 
         // NEW FOLDER ACTION
         let action = SimpleAction::new("explorer-new-folder", None);
@@ -825,7 +839,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
 
         // DELETE ACTION
         let action = SimpleAction::new("explorer-delete", None);
@@ -865,7 +879,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
 
         // RENAME ACTION
         let action = SimpleAction::new("explorer-rename", None);
@@ -917,7 +931,7 @@ pub fn build_ui(app: &Application) {
             }
         });
 
-        app.add_action(&action);
+        window.add_action(&action);
     }
 
     window.present();
@@ -929,10 +943,11 @@ fn create_file_menu() -> gtk4::MenuButton {
     menu_button.style_context().add_class("menubutton");
 
     let menu = gtk4::gio::Menu::new();
-    menu.append(Some("New"), Some("app.new"));
-    menu.append(Some("Open"), Some("app.open"));
-    menu.append(Some("Save"), Some("app.save"));
-    menu.append(Some("Save As"), Some("app.save-as"));
+    menu.append(Some("New"), Some("win.new"));
+    menu.append(Some("New Window"), Some("app.new-window"));
+    menu.append(Some("Open"), Some("win.open"));
+    menu.append(Some("Save"), Some("win.save"));
+    menu.append(Some("Save As"), Some("win.save-as"));
     menu.append(Some("Quit"), Some("app.quit"));
 
     let popover = PopoverMenu::from_model(Some(&menu));
@@ -947,13 +962,13 @@ fn create_edit_menu() -> gtk4::MenuButton {
     menu_button.style_context().add_class("menubutton");
 
     let menu = gtk4::gio::Menu::new();
-    menu.append(Some("Undo"), Some("app.undo"));
-    menu.append(Some("Redo"), Some("app.redo"));
-    menu.append(Some("Cut"), Some("app.cut"));
-    menu.append(Some("Copy"), Some("app.copy"));
-    menu.append(Some("Paste"), Some("app.paste"));
-    menu.append(Some("Find"), Some("app.find"));
-    menu.append(Some("Replace"), Some("app.replace"));
+    menu.append(Some("Undo"), Some("win.undo"));
+    menu.append(Some("Redo"), Some("win.redo"));
+    menu.append(Some("Cut"), Some("win.cut"));
+    menu.append(Some("Copy"), Some("win.copy"));
+    menu.append(Some("Paste"), Some("win.paste"));
+    menu.append(Some("Find"), Some("win.find"));
+    menu.append(Some("Replace"), Some("win.replace"));
 
     let popover = PopoverMenu::from_model(Some(&menu));
     menu_button.set_popover(Some(&popover));
@@ -967,8 +982,8 @@ fn create_view_menu() -> gtk4::MenuButton {
     menu_button.style_context().add_class("menubutton");
 
     let menu = gtk4::gio::Menu::new();
-    menu.append(Some("Toggle Word Wrap"), Some("app.toggle-wrap"));
-    menu.append(Some("Toggle Theme"), Some("app.toggle-theme"));
+    menu.append(Some("Toggle Word Wrap"), Some("win.toggle-wrap"));
+    menu.append(Some("Toggle Theme"), Some("win.toggle-theme"));
 
     let popover = PopoverMenu::from_model(Some(&menu));
     menu_button.set_popover(Some(&popover));
