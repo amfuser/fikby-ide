@@ -1,12 +1,16 @@
+use gtk4::gio::SimpleAction;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, ComboBoxText, Dialog, Entry, Grid,
     Label, MessageDialog, MessageType, Notebook, Orientation, Paned, Popover, PopoverMenu,
-    ResponseType, SpinButton,
+    ResponseType, ScrolledWindow, SpinButton, TextBuffer, TextView,
 };
-use gtk4::gio::SimpleAction;
 use std::cell::RefCell;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fs, process::Child, process::Command, process::Stdio};
 
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -54,6 +58,19 @@ pub fn build_ui(app: &Application) {
     let right_box = GtkBox::new(Orientation::Horizontal, 0);
     right_box.set_hexpand(true);
     right_box.set_halign(gtk4::Align::End);
+
+    let run_button = Button::with_label("▶ Run");
+    run_button.style_context().add_class("right-button");
+    right_box.append(&run_button);
+
+    let stop_button = Button::with_label("■ Stop");
+    stop_button.set_sensitive(false);
+    stop_button.style_context().add_class("right-button");
+    right_box.append(&stop_button);
+
+    let run_status_label = Label::new(Some("Idle"));
+    run_status_label.set_margin_end(8);
+    right_box.append(&run_status_label);
 
     let settings_btn = Button::new();
     settings_btn.set_icon_name("emblem-system-symbolic");
@@ -160,6 +177,23 @@ pub fn build_ui(app: &Application) {
     notebook.set_hexpand(true);
     notebook.set_size_request(-1, 100);
 
+    let output_buffer = TextBuffer::new(None);
+    let output_view = TextView::new();
+    output_view.set_editable(false);
+    output_view.set_monospace(true);
+    output_view.set_vexpand(false);
+    output_view.set_hexpand(true);
+    output_view.set_buffer(Some(&output_buffer));
+
+    let output_scroller = ScrolledWindow::new();
+    output_scroller.set_vexpand(false);
+    output_scroller.set_min_content_height(140);
+    output_scroller.set_child(Some(&output_view));
+
+    let editor_area = GtkBox::new(Orientation::Vertical, 6);
+    editor_area.append(&notebook);
+    editor_area.append(&output_scroller);
+
     // Status bar
     let status_bar = GtkBox::new(Orientation::Horizontal, 10);
     status_bar.style_context().add_class("status");
@@ -172,7 +206,7 @@ pub fn build_ui(app: &Application) {
     status_bar.append(&status_label);
     status_bar.append(&status_info_label);
 
-    paned.set_end_child(Some(&notebook));
+    paned.set_end_child(Some(&editor_area));
     vbox.append(&paned);
     vbox.append(&status_bar);
 
@@ -181,6 +215,194 @@ pub fn build_ui(app: &Application) {
     // Store references in Rc<RefCell<>> for sharing
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
+    let active_child: Rc<RefCell<Option<Child>>> = Rc::new(RefCell::new(None));
+    let active_run_artifacts: Rc<RefCell<Option<RunArtifacts>>> = Rc::new(RefCell::new(None));
+
+    // RUN ACTION (runs current editor buffer in-process workflow)
+    {
+        let current_editor_clone = current_editor.clone();
+        let active_child_clone = active_child.clone();
+        let active_run_artifacts_clone = active_run_artifacts.clone();
+        let output_buffer_clone = output_buffer.clone();
+        let run_button_clone = run_button.clone();
+        let stop_button_clone = stop_button.clone();
+        let run_status_label_clone = run_status_label.clone();
+
+        run_button.connect_clicked(move |_| {
+            if active_child_clone.borrow().is_some() {
+                return;
+            }
+
+            let editor = if let Some(editor) = current_editor_clone.borrow().as_ref() {
+                editor.clone()
+            } else {
+                append_output(
+                    &output_buffer_clone,
+                    "No active editor tab is open. Open a file or create a new tab first.\n",
+                );
+                run_status_label_clone.set_text("Idle");
+                return;
+            };
+
+            let source_text = editor.get_text();
+            if source_text.trim().is_empty() {
+                append_output(&output_buffer_clone, "Cannot run an empty editor buffer.\n");
+                run_status_label_clone.set_text("Idle");
+                return;
+            }
+
+            let current_file = editor.current_file.borrow().clone();
+            let (mut command, run_artifacts, command_display) =
+                match build_run_command(&source_text, current_file.as_ref()) {
+                    Ok(spec) => spec,
+                    Err(err) => {
+                        append_output(&output_buffer_clone, &format!("{err}\n"));
+                        run_status_label_clone.set_text("Idle");
+                        return;
+                    }
+                };
+
+            output_buffer_clone.set_text("");
+            append_output(&output_buffer_clone, &format!("$ {command_display}\n"));
+
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(err) => {
+                    append_output(
+                        &output_buffer_clone,
+                        &format!("Failed to start execution process: {err}\n"),
+                    );
+                    run_status_label_clone.set_text("Idle");
+                    return;
+                }
+            };
+
+            let (sender, receiver) = glib::MainContext::channel::<String>(glib::PRIORITY_DEFAULT);
+            let output_buffer_for_receiver = output_buffer_clone.clone();
+            receiver.attach(None, move |line| {
+                append_output(&output_buffer_for_receiver, &line);
+                glib::Continue(true)
+            });
+
+            if let Some(stdout) = child.stdout.take() {
+                let sender_stdout = sender.clone();
+                std::thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(text) => {
+                                let _ = sender_stdout.send(format!("{text}\n"));
+                            }
+                            Err(err) => {
+                                let _ = sender_stdout.send(format!("[stdout read error] {err}\n"));
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
+            if let Some(stderr) = child.stderr.take() {
+                let sender_stderr = sender.clone();
+                std::thread::spawn(move || {
+                    let reader = BufReader::new(stderr);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(text) => {
+                                let _ = sender_stderr.send(format!("{text}\n"));
+                            }
+                            Err(err) => {
+                                let _ = sender_stderr.send(format!("[stderr read error] {err}\n"));
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+
+            run_button_clone.set_sensitive(false);
+            stop_button_clone.set_sensitive(true);
+            run_status_label_clone.set_text("Running");
+            *active_run_artifacts_clone.borrow_mut() = Some(run_artifacts);
+            *active_child_clone.borrow_mut() = Some(child);
+
+            let active_child_for_timer = active_child_clone.clone();
+            let active_artifacts_for_timer = active_run_artifacts_clone.clone();
+            let run_button_for_timer = run_button_clone.clone();
+            let stop_button_for_timer = stop_button_clone.clone();
+            let run_status_for_timer = run_status_label_clone.clone();
+            let output_for_timer = output_buffer_clone.clone();
+
+            glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+                let mut exit_line: Option<String> = None;
+                let mut should_stop = false;
+
+                {
+                    let mut child_slot = active_child_for_timer.borrow_mut();
+                    if let Some(child_ref) = child_slot.as_mut() {
+                        match child_ref.try_wait() {
+                            Ok(Some(status)) => {
+                                exit_line =
+                                    Some(format!("\n[process exited with status: {status}]\n"));
+                                should_stop = true;
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                exit_line = Some(format!("\n[process monitoring failed: {err}]\n"));
+                                should_stop = true;
+                            }
+                        }
+                    } else {
+                        should_stop = true;
+                    }
+                }
+
+                if should_stop {
+                    active_child_for_timer.borrow_mut().take();
+                    if let Some(artifacts) = active_artifacts_for_timer.borrow_mut().take() {
+                        cleanup_run_artifacts(&artifacts);
+                    }
+                    if let Some(line) = exit_line {
+                        append_output(&output_for_timer, &line);
+                    }
+                    run_button_for_timer.set_sensitive(true);
+                    stop_button_for_timer.set_sensitive(false);
+                    run_status_for_timer.set_text("Idle");
+                    return glib::Continue(false);
+                }
+
+                glib::Continue(true)
+            });
+        });
+    }
+
+    // STOP ACTION (terminates active run process)
+    {
+        let active_child_clone = active_child.clone();
+        let active_run_artifacts_clone = active_run_artifacts.clone();
+        let output_buffer_clone = output_buffer.clone();
+        let run_button_clone = run_button.clone();
+        let stop_button_clone = stop_button.clone();
+        let run_status_label_clone = run_status_label.clone();
+
+        stop_button.connect_clicked(move |_| {
+            if let Some(mut child) = active_child_clone.borrow_mut().take() {
+                let _ = child.kill();
+                let _ = child.wait();
+                append_output(&output_buffer_clone, "\n[process stopped]\n");
+            }
+
+            if let Some(artifacts) = active_run_artifacts_clone.borrow_mut().take() {
+                cleanup_run_artifacts(&artifacts);
+            }
+
+            run_button_clone.set_sensitive(true);
+            stop_button_clone.set_sensitive(false);
+            run_status_label_clone.set_text("Idle");
+        });
+    }
 
     // NEW FILE ACTION
     {
@@ -205,7 +427,8 @@ pub fn build_ui(app: &Application) {
                 settings_clone.clone(),
             );
 
-            let page_index = notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
+            let page_index =
+                notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
             notebook_clone.set_current_page(Some(page_index));
 
             editor.update(&status_label_clone, &status_info_label_clone);
@@ -669,45 +892,47 @@ pub fn build_ui(app: &Application) {
         let status_info_label_clone = status_info_label.clone();
         let settings_clone = editor_settings.clone();
 
-        file_explorer_rc.borrow().connect_row_activated(move |path_buf, is_dir| {
-            if !is_dir {
-                if let Ok(content) = std::fs::read_to_string(&path_buf) {
-                    let theme_clone = current_theme_clone.borrow().clone();
-                    let editor = Editor::new(
-                        "File",
-                        Some(content),
-                        Some(path_buf.clone()),
-                        ss_clone.clone(),
-                        theme_clone,
-                        settings_clone.clone(),
-                    );
+        file_explorer_rc
+            .borrow()
+            .connect_row_activated(move |path_buf, is_dir| {
+                if !is_dir {
+                    if let Ok(content) = std::fs::read_to_string(&path_buf) {
+                        let theme_clone = current_theme_clone.borrow().clone();
+                        let editor = Editor::new(
+                            "File",
+                            Some(content),
+                            Some(path_buf.clone()),
+                            ss_clone.clone(),
+                            theme_clone,
+                            settings_clone.clone(),
+                        );
 
-                    let page_index =
-                        notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
-                    notebook_clone.set_current_page(Some(page_index));
-                    editor.update(&status_label_clone, &status_info_label_clone);
+                        let page_index =
+                            notebook_clone.append_page(&editor.content_row(), Some(&editor.header));
+                        notebook_clone.set_current_page(Some(page_index));
+                        editor.update(&status_label_clone, &status_info_label_clone);
 
-                    editors_clone.borrow_mut().push(editor.clone());
-                    *current_editor_clone.borrow_mut() = Some(editor.clone());
+                        editors_clone.borrow_mut().push(editor.clone());
+                        *current_editor_clone.borrow_mut() = Some(editor.clone());
 
-                    file_explorer_clone.borrow().highlight_file(&path_buf);
+                        file_explorer_clone.borrow().highlight_file(&path_buf);
 
-                    let notebook_clone2 = notebook_clone.clone();
-                    let editors_clone2 = editors_clone.clone();
-                    let editor_clone = editor.clone();
-                    editor.close_button.connect_clicked(move |_| {
-                        if let Some(page_num) =
-                            notebook_clone2.page_num(&editor_clone.content_row())
-                        {
-                            notebook_clone2.remove_page(Some(page_num));
-                            editors_clone2
-                                .borrow_mut()
-                                .retain(|e| !Rc::ptr_eq(e, &editor_clone));
-                        }
-                    });
+                        let notebook_clone2 = notebook_clone.clone();
+                        let editors_clone2 = editors_clone.clone();
+                        let editor_clone = editor.clone();
+                        editor.close_button.connect_clicked(move |_| {
+                            if let Some(page_num) =
+                                notebook_clone2.page_num(&editor_clone.content_row())
+                            {
+                                notebook_clone2.remove_page(Some(page_num));
+                                editors_clone2
+                                    .borrow_mut()
+                                    .retain(|e| !Rc::ptr_eq(e, &editor_clone));
+                            }
+                        });
+                    }
                 }
-            }
-        });
+            });
 
         // Directory expansion
         let file_explorer_clone2 = file_explorer_rc.clone();
@@ -750,14 +975,20 @@ pub fn build_ui(app: &Application) {
                 let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
                     selected_path.clone()
                 } else {
-                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                    selected_path
+                        .parent()
+                        .unwrap_or(&selected_path)
+                        .to_path_buf()
                 };
 
                 let dialog = Dialog::with_buttons(
                     Some("New File"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Create", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -774,8 +1005,9 @@ pub fn build_ui(app: &Application) {
                     if response == ResponseType::Accept {
                         let file_name = entry.text();
                         if !file_name.is_empty() {
-                            if let Err(e) =
-                                file_explorer_clone2.borrow().create_file(&parent_dir, &file_name)
+                            if let Err(e) = file_explorer_clone2
+                                .borrow()
+                                .create_file(&parent_dir, &file_name)
                             {
                                 eprintln!("Failed to create file: {}", e);
                             }
@@ -800,14 +1032,20 @@ pub fn build_ui(app: &Application) {
                 let parent_dir = if file_explorer_clone.borrow().get_selected_is_dir() {
                     selected_path.clone()
                 } else {
-                    selected_path.parent().unwrap_or(&selected_path).to_path_buf()
+                    selected_path
+                        .parent()
+                        .unwrap_or(&selected_path)
+                        .to_path_buf()
                 };
 
                 let dialog = Dialog::with_buttons(
                     Some("New Folder"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Create", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Create", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -898,7 +1136,10 @@ pub fn build_ui(app: &Application) {
                     Some("Rename"),
                     Some(&window_clone),
                     gtk4::DialogFlags::MODAL,
-                    &[("Cancel", ResponseType::Cancel), ("Rename", ResponseType::Accept)],
+                    &[
+                        ("Cancel", ResponseType::Cancel),
+                        ("Rename", ResponseType::Accept),
+                    ],
                 );
 
                 let content_area = dialog.content_area();
@@ -935,6 +1176,141 @@ pub fn build_ui(app: &Application) {
     }
 
     window.present();
+}
+
+#[derive(Debug)]
+struct RunArtifacts {
+    source_path: PathBuf,
+    binary_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RunLanguage {
+    Rust,
+    Python,
+    JavaScript,
+    Shell,
+}
+
+fn detect_run_language(current_file: Option<&PathBuf>) -> Option<RunLanguage> {
+    match current_file
+        .and_then(|path| path.extension())
+        .and_then(|ext| ext.to_str())
+    {
+        Some("rs") => Some(RunLanguage::Rust),
+        Some("py") => Some(RunLanguage::Python),
+        Some("js") => Some(RunLanguage::JavaScript),
+        Some("sh") => Some(RunLanguage::Shell),
+        Some(_) => None,
+        None => Some(RunLanguage::Rust),
+    }
+}
+
+fn build_run_command(
+    source_text: &str,
+    current_file: Option<&PathBuf>,
+) -> Result<(Command, RunArtifacts, String), String> {
+    let language = detect_run_language(current_file).ok_or_else(|| {
+        "Unsupported file type for Run. Supported extensions: .rs, .py, .js, .sh".to_string()
+    })?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    let temp_dir = std::env::temp_dir();
+
+    match language {
+        RunLanguage::Rust => {
+            let source_path = temp_dir.join(format!("fikby_run_{now}.rs"));
+            let binary_path = temp_dir.join(format!("fikby_run_{now}_bin"));
+            fs::write(&source_path, source_text)
+                .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
+
+            let command_line = format!(
+                "rustc \"{}\" -o \"{}\" && \"{}\"",
+                source_path.display(),
+                binary_path.display(),
+                binary_path.display()
+            );
+
+            let mut command = Command::new("sh");
+            command.arg("-lc").arg(&command_line);
+
+            Ok((
+                command,
+                RunArtifacts {
+                    source_path,
+                    binary_path: Some(binary_path),
+                },
+                command_line,
+            ))
+        }
+        RunLanguage::Python => {
+            let source_path = temp_dir.join(format!("fikby_run_{now}.py"));
+            fs::write(&source_path, source_text)
+                .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
+
+            let mut command = Command::new("python3");
+            command.arg(&source_path);
+
+            Ok((
+                command,
+                RunArtifacts {
+                    source_path,
+                    binary_path: None,
+                },
+                format!("python3 {}", source_path.display()),
+            ))
+        }
+        RunLanguage::JavaScript => {
+            let source_path = temp_dir.join(format!("fikby_run_{now}.js"));
+            fs::write(&source_path, source_text)
+                .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
+
+            let mut command = Command::new("node");
+            command.arg(&source_path);
+
+            Ok((
+                command,
+                RunArtifacts {
+                    source_path,
+                    binary_path: None,
+                },
+                format!("node {}", source_path.display()),
+            ))
+        }
+        RunLanguage::Shell => {
+            let source_path = temp_dir.join(format!("fikby_run_{now}.sh"));
+            fs::write(&source_path, source_text)
+                .map_err(|err| format!("Failed to write temporary source file: {err}"))?;
+
+            let mut command = Command::new("bash");
+            command.arg(&source_path);
+
+            Ok((
+                command,
+                RunArtifacts {
+                    source_path,
+                    binary_path: None,
+                },
+                format!("bash {}", source_path.display()),
+            ))
+        }
+    }
+}
+
+fn cleanup_run_artifacts(artifacts: &RunArtifacts) {
+    let _ = fs::remove_file(&artifacts.source_path);
+    if let Some(binary_path) = artifacts.binary_path.as_ref() {
+        let _ = fs::remove_file(binary_path);
+    }
+}
+
+fn append_output(output_buffer: &TextBuffer, text: &str) {
+    let mut end = output_buffer.end_iter();
+    output_buffer.insert(&mut end, text);
 }
 
 fn create_file_menu() -> gtk4::MenuButton {
