@@ -30,6 +30,9 @@ enum RunEvent {
     Finished { run_id: u64, status: String },
 }
 
+type RunningChild = Rc<RefCell<Option<Arc<Mutex<Option<std::process::Child>>>>>>;
+const PROCESS_POLL_INTERVAL_MS: u64 = 100;
+
 pub fn build_ui(app: &Application) {
     let ss = Rc::new(SyntaxSet::load_defaults_newlines());
     let ts = ThemeSet::load_defaults();
@@ -229,8 +232,7 @@ pub fn build_ui(app: &Application) {
     // Store references in Rc<RefCell<>> for sharing
     let editors: Rc<RefCell<Vec<Rc<Editor>>>> = Rc::new(RefCell::new(Vec::new()));
     let current_editor: Rc<RefCell<Option<Rc<Editor>>>> = Rc::new(RefCell::new(None));
-    let running_child: Rc<RefCell<Option<Arc<Mutex<Option<std::process::Child>>>>>> =
-        Rc::new(RefCell::new(None));
+    let running_child: RunningChild = Rc::new(RefCell::new(None));
     let current_run_id = Rc::new(RefCell::new(0u64));
     let run_generation = Arc::new(AtomicU64::new(0));
     let (run_tx, run_rx) = glib::MainContext::channel::<RunEvent>(glib::Priority::default());
@@ -425,7 +427,7 @@ pub fn build_ui(app: &Application) {
                     break;
                 }
 
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(PROCESS_POLL_INTERVAL_MS));
             });
         });
     }
@@ -1324,7 +1326,7 @@ fn build_execution_command(source_path: &PathBuf) -> Result<Command, String> {
             Ok(cmd)
         }
         "rs" => {
-            let binary_path = source_path.with_extension("run-bin");
+            let binary_path = source_path.with_extension("compiled-runner");
             let shell = format!(
                 "rustc '{}' -o '{}' && exec '{}'",
                 source_path.to_string_lossy(),
@@ -1332,7 +1334,7 @@ fn build_execution_command(source_path: &PathBuf) -> Result<Command, String> {
                 binary_path.to_string_lossy()
             );
             let mut cmd = Command::new("bash");
-            cmd.args(["-lc", &shell]);
+            cmd.args(["-c", &shell]);
             Ok(cmd)
         }
         _ => Err("Run is supported for .py, .js, .sh, .rb, .go, and .rs files.".to_string()),
